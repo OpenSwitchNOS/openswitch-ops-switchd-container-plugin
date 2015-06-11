@@ -16,30 +16,9 @@
  */
 
 #include <config.h>
-
-
 #include <errno.h>
 
-#include "dpif-netdev.h"
-#include "dynamic-string.h"
-#include "flow.h"
-#include "list.h"
-#include "netdev-provider.h"
-#include "netdev-vport.h"
-#include "ofp-print.h"
-#include "ofpbuf.h"
-#include "packet-dpif.h"
-#include "packets.h"
-#include "pcap-file.h"
-#include "poll-loop.h"
-#include "shash.h"
-#include "sset.h"
-#include "stream.h"
-#include "unaligned.h"
-#include "timeval.h"
-#include "unixctl.h"
 #include "openvswitch/vlog.h"
-#include <stdlib.h>
 
 #include "netdev-sim.h"
 
