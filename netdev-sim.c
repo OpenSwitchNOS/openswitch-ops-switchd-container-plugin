@@ -16,14 +16,26 @@
  */
 
 #include <config.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <net/ethernet.h>
+#include <linux/ethtool.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
+
+#include <openhalon-idl.h>
 
 #include "openvswitch/vlog.h"
-
 #include "netdev-sim.h"
 
-VLOG_DEFINE_THIS_MODULE(netdev_sim);
+#define SWNS_EXEC       "/sbin/ip netns exec swns"
 
+VLOG_DEFINE_THIS_MODULE(netdev_sim);
 
 /* Protects 'sim_list'. */
 static struct ovs_mutex sim_list_mutex = OVS_MUTEX_INITIALIZER;
@@ -42,10 +54,13 @@ struct netdev_sim {
     struct ovs_mutex mutex OVS_ACQ_AFTER(sim_list_mutex);
 
     uint8_t hwaddr[ETH_ADDR_LEN] OVS_GUARDED;
+    char hw_addr_str[18];
     int mtu OVS_GUARDED;
     struct netdev_stats stats OVS_GUARDED;
     enum netdev_flags flags OVS_GUARDED;
-    int hw_id;
+
+    int linux_intf_state;
+    char linux_intf_name[16];
 };
 
 static int netdev_sim_construct(struct netdev *);
@@ -61,14 +76,6 @@ netdev_sim_cast(const struct netdev *netdev)
 {
     ovs_assert(is_sim_class(netdev_get_class(netdev)));
     return CONTAINER_OF(netdev, struct netdev_sim, up);
-}
-
-int netdev_sim_get_hw_id(struct netdev *netdev)
-{
-    struct netdev_sim *nb = netdev_sim_cast(netdev);
-    ovs_assert(is_sim_class(netdev_get_class(netdev)));
-
-    return nb->hw_id;
 }
 
 static struct netdev *
@@ -97,6 +104,7 @@ netdev_sim_construct(struct netdev *netdev_)
     netdev->hwaddr[5] = n;
     netdev->mtu = 1500;
     netdev->flags = 0;
+    netdev->linux_intf_state = 0;
 
     ovs_mutex_unlock(&netdev->mutex);
 
@@ -125,59 +133,108 @@ netdev_sim_dealloc(struct netdev *netdev_)
     free(netdev);
 }
 
-static int
-netdev_sim_set_config(struct netdev *netdev_, const struct smap *args)
+static void
+netdev_sim_run(void)
 {
-    int i;
+    /* HALON_TODO: Currently we are not supporting to change the
+     * link state on the go. So ignoring this function. */
+}
+
+static int
+netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
+{
     struct netdev_sim *netdev = netdev_sim_cast(netdev_);
-    const char *hw_enable = smap_get(args, "hw_enable");
-    const char *hw_id = smap_get(args, "hw_id");
-
-    /* Setup physcial ports for simulation */
-    const char *devname = netdev_get_name(netdev);
-    char system_cmd[1024];
-
-    VLOG_INFO("Setting up physical interfaces, %s", devname);
-
-    /* If eXYZ iinterface doesn't exist, rename ethXYZ to eXYZ */
-    sprintf(system_cmd, "ip link show %s > /dev/null 2>&1", devname);
-    if (system(system_cmd) != 0) {
-        /* i will point to start of numeric part of the interface */
-        for (i=0; i < strlen(devname); i++) {
-            if (devname[i] >= '0' && devname[i] <= '9') {
-                break;
-            }
-        }
-        sprintf(system_cmd, "ip link set dev eth%s down", &devname[i]);
-        VLOG_INFO("ip link set dev eth down --%s ",  system_cmd);
-        if (system(system_cmd) != 0) {
-            VLOG_INFO("ERROR: NETDEV-SIM | system command execution failure");
-        }
-        sprintf(system_cmd, "ip link set dev eth%s name %s", &devname[i], devname);
-        VLOG_INFO("ip link set dev eth name --%s ", system_cmd);
-        if (system(system_cmd) != 0) {
-            VLOG_INFO("ERROR: NETDEV-SIM | system command execution failure");
-        }
-        sprintf(system_cmd, "ip link set dev %s up", devname);
-        VLOG_INFO("Rename interface cli - %s", system_cmd);
-        if (system(system_cmd) != 0) {
-            VLOG_INFO("ERROR: NETDEV-SIM | system command execution failure");
-        }
-    }
-
+    const char *hw_id = smap_get(args, "switch_intf_id");
+    const char *mac_addr = smap_get(args, "mac_addr");
+    struct ether_addr *ether_mac = NULL;
+    char cmd[1024];
 
     ovs_mutex_lock(&netdev->mutex);
 
+    if (hw_id != NULL) {
+        strncpy(netdev->linux_intf_name, hw_id, sizeof(netdev->linux_intf_name));
+    } else {
+        VLOG_ERR("Invalid switch interface name %s", hw_id);
+    }
+
+    if(mac_addr != NULL) {
+        strncpy(netdev->hw_addr_str, mac_addr, sizeof(netdev->hw_addr_str));
+    } else {
+        VLOG_ERR("Invalid mac address %s", mac_addr);
+    }
+    
+    sprintf(cmd, "%s /sbin/ip link set dev %s down",
+            SWNS_EXEC, netdev->linux_intf_name);
+    if (system(cmd) != 0) {
+        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s",cmd);
+    }
+    
+    sprintf(cmd, "%s /sbin/ip link set %s address %s",
+            SWNS_EXEC, netdev->up.name, netdev->hw_addr_str);
+    if (system(cmd) != 0) {
+        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s",cmd);
+    }
+    
+    sprintf(cmd, "%s /sbin/ip link set dev %s up",
+            SWNS_EXEC, netdev->linux_intf_name);
+    if (system(cmd) != 0) {
+        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s",cmd);
+    }
+
+    ovs_mutex_unlock(&netdev->mutex);
+
+    return 0;
+}
+
+static int
+netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
+{
+    char cmd[80], cmd_drop_input[80], cmd_drop_fwd[80];
+    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
+    const char *hw_enable = smap_get(args, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE);
+
+    VLOG_DBG("Setting up physical interfaces, %s", netdev->linux_intf_name);
+
+    ovs_mutex_lock(&netdev->mutex);
+
+    VLOG_DBG("hw_enable %s -- Interface %s ", hw_enable, netdev->linux_intf_name);
+
     if (hw_enable) {
-        if (!strcmp(hw_enable, "true")) {
-            sprintf(system_cmd, "ip link set dev %s up", devname);
+        if (!strcmp(hw_enable, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE_TRUE)) {
+            netdev->flags |= NETDEV_UP;
+            netdev->linux_intf_state = 1;
+            sprintf(cmd, "%s /sbin/ip link set dev %s up",
+                    SWNS_EXEC, netdev->linux_intf_name);
+            /* HALON_TODO: iptable rules have to be added in the ofproto-provider code
+             * or need a condition check for is it a L2 or L3 CLI, as rules should be
+             * added only for L2*/
+            sprintf(cmd_drop_input, "%s iptables -A INPUT -i %s -j DROP",
+                    SWNS_EXEC, netdev->linux_intf_name);
+            sprintf(cmd_drop_fwd, "%s iptables -A FORWARD -i %s -j DROP",
+                    SWNS_EXEC, netdev->linux_intf_name);
+
         } else {
-            sprintf(system_cmd, "ip link set dev %s down", devname);
-        }
-        if (system(system_cmd) != 0) {
-            VLOG_INFO("ERROR: NETDEV-SIM | system command failure");
+            netdev->flags &= ~NETDEV_UP;
+            netdev->linux_intf_state = 0;
+            sprintf(cmd, "%s /sbin/ip link set dev %s down",
+                    SWNS_EXEC, netdev->linux_intf_name);
+            sprintf(cmd_drop_input, "%s iptables -D INPUT -i %s -j DROP",
+                    SWNS_EXEC, netdev->linux_intf_name);
+            sprintf(cmd_drop_fwd, "%s iptables -D FORWARD -i %s -j DROP",
+                    SWNS_EXEC, netdev->linux_intf_name);
         }
     }
+    if (system(cmd) != 0) {
+        VLOG_ERR("system command failure: cmd=%s",cmd);
+    }
+    if (system(cmd_drop_input) != 0) {
+        VLOG_ERR("system command failure: cmd=%s",cmd_drop_input);
+    }
+    if (system(cmd_drop_fwd) != 0) {
+        VLOG_ERR("system command failure: cmd=%s",cmd_drop_fwd);
+    }
+
+    netdev_change_seq_changed(netdev_);
 
     ovs_mutex_unlock(&netdev->mutex);
 
@@ -226,38 +283,36 @@ netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
 }
 
 static int
-netdev_sim_update_flags__(struct netdev_sim *netdev,
-                            enum netdev_flags off, enum netdev_flags on,
-                            enum netdev_flags *old_flagsp)
-    OVS_REQUIRES(netdev->mutex)
-{
-    if ((off | on) & ~(NETDEV_UP | NETDEV_PROMISC)) {
-        return EINVAL;
-    }
-
-    *old_flagsp = netdev->flags;
-    netdev->flags |= on;
-    netdev->flags &= ~off;
-    if (*old_flagsp != netdev->flags) {
-        netdev_change_seq_changed(&netdev->up);
-    }
-
-    return 0;
-}
-
-static int
 netdev_sim_update_flags(struct netdev *netdev_,
                           enum netdev_flags off, enum netdev_flags on,
                           enum netdev_flags *old_flagsp)
 {
     struct netdev_sim *netdev = netdev_sim_cast(netdev_);
-    int error;
+
+    /* HALON_TODO: Currently we are not supporting changing the
+     * configuration using the FLAGS. So ignoring the
+     * incoming on/off flags. */
+    if ((off | on) & ~(NETDEV_UP | NETDEV_PROMISC)) {
+        return EINVAL;
+    }
 
     ovs_mutex_lock(&netdev->mutex);
-    error = netdev_sim_update_flags__(netdev, off, on, old_flagsp);
+    *old_flagsp = netdev->flags;
     ovs_mutex_unlock(&netdev->mutex);
 
-    return error;
+    return 0;
+}
+
+static int
+netdev_sim_get_carrier(const struct netdev *netdev_, bool *carrier)
+{
+    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
+
+    ovs_mutex_lock(&netdev->mutex);
+    *carrier = netdev->linux_intf_state;
+    ovs_mutex_unlock(&netdev->mutex);
+
+    return 0;
 }
 
 /* Helper functions. */
@@ -265,7 +320,7 @@ netdev_sim_update_flags(struct netdev *netdev_,
 static const struct netdev_class sim_class = {
     "system",
     NULL,                       /* init */
-    NULL,                       /* run */
+    netdev_sim_run,
     NULL,                       /* wait */
 
     netdev_sim_alloc,
@@ -273,9 +328,9 @@ static const struct netdev_class sim_class = {
     netdev_sim_destruct,
     netdev_sim_dealloc,
     NULL,                       /* get_config */
-    netdev_sim_set_config,
-    NULL,
-    NULL,
+    NULL,                       /* set_config */
+    netdev_sim_set_hw_intf_info,
+    netdev_sim_set_hw_intf_config,
     NULL,                       /* get_tunnel_config */
     NULL,                       /* build header */
     NULL,                       /* push header */
@@ -291,7 +346,7 @@ static const struct netdev_class sim_class = {
     NULL,                       /* get_mtu */
     NULL,                       /* set_mtu */
     NULL,                       /* get_ifindex */
-    NULL,                       /* get_carrier */
+    netdev_sim_get_carrier,
     NULL,                       /* get_carrier_resets */
     NULL,                       /* get_miimon */
     netdev_sim_get_stats,

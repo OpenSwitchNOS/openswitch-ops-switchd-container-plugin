@@ -144,13 +144,16 @@ construct(struct ofproto *ofproto_)
     struct shash_node *node, *next;
     int error=0;
     char ovs_addbr[80];
-    VLOG_INFO("SIMULATION:: %s add-br %s", OVS_VSCTL, ofproto->up.name);
-    if (sprintf(ovs_addbr, "%s add-br %s", OVS_VSCTL, ofproto->up.name) > 80) {
-        VLOG_INFO("ERROR: |OFPROTO-SIM-PROVIDER| Command line string exceeds the buffer size");
-        return;
-    }
+    sprintf(ovs_addbr, "%s add-br %s", OVS_VSCTL, ofproto->up.name);
+    VLOG_INFO("%s add-br %s", OVS_VSCTL, ofproto->up.name);
     if (system(ovs_addbr) != 0) {
-        VLOG_ERR("ERROR: OFPROTO-SIM-PROVIDER | system command \"add-br %s\" failure", ofproto->up.name);
+        VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
+    }
+    sprintf(ovs_addbr, "%s set br %s datapath_type=netdev",
+        OVS_VSCTL, ofproto->up.name);
+    VLOG_INFO("%s set br %s datapath_type=netdev", OVS_VSCTL, ofproto->up.name);
+    if (system(ovs_addbr) != 0) {
+        VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
     }
     ofproto->netflow = NULL;
     ofproto->stp = NULL;
@@ -440,7 +443,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
 
     VLOG_INFO(cmd_str);
     if (system(cmd_str) != 0) {
-        VLOG_ERR("ERROR: OFPROTO-SIM-PROVIDER | system command execution failure");
+        VLOG_ERR("system command failure: %s, %s", cmd_str, strerror(errno));
     }
 
     return 0;
