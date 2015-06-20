@@ -59,6 +59,78 @@ class vlanTrunkTest( HalonTest ):
                                        link=HalonLink, controller=None,
                                        build=True)
 
+    def check_config(self):
+        '''
+            Check configuration changes in HALON-OvsDB and Sim-OvsDB for proper values
+        '''
+        s1 = self.net.switches[ 0 ]
+        h1 = self.net.hosts[ 0 ]
+        h2 = self.net.hosts[ 1 ]
+
+        info("\n################### Test Case 1 - Check configuration between Halon-OvsDB \
+        and Sim-OvsDB ###################\n")
+        info('\nTesting to check if configuration is as expected in the Halon-OvsDB and Sim-OvsDB\n')
+
+        s1.cmd("/usr/bin/ovs-vsctl add-br br0")
+        halon_br_name = s1.cmd("/usr/bin/ovs-vsctl get br br0 name").strip()
+        out = s1.cmd("/opt/openvswitch/bin/ovs-vsctl get br br0 datapath_type name")
+        ovs_datapath_type, ovs_br_name = out.splitlines()
+        assert ovs_datapath_type == 'netdev' and halon_br_name == ovs_br_name, \
+               "Unexpected configuration in Bridge"
+        info("\nBridge configuration matches in Halon-OvsDB and SIM-OvsDB.\n")
+
+        s1.cmd("/usr/bin/ovs-vsctl add-vlan br0 100 admin=up")
+        out = s1.cmd("/usr/bin/ovs-vsctl get vlan VLAN100 admin oper_state oper_state_reason")
+        halon_admin_state, halon_oper_state, halon_oper_state_reason = out.splitlines()
+        assert halon_admin_state == 'up' and halon_oper_state == 'down' \
+               and halon_oper_state_reason == 'no_member_port', "Halon-OvsDB VLAN configuration \
+               before adding port is wrong!"
+        info("\nHalon-OvsDB VLAN configuration before adding port is as expected\n")
+
+        s1.cmd("/usr/bin/ovs-vsctl add-port br0 1 vlan_mode=access tag=100 -- set interface 1 user_config:admin=up")
+        s1.cmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=trunk trunks=100 -- set interface 2 user_config:admin=up")
+        s1.cmd("/usr/bin/ovs-vsctl set interface 1 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
+        time.sleep(1)
+
+        out = s1.cmd("/usr/bin/ovs-vsctl get vlan VLAN100 oper_state oper_state_reason")
+        halon_oper_state, halon_oper_state_reason = out.splitlines()
+        assert halon_oper_state == 'up' and halon_oper_state_reason == 'ok', \
+               "Halon-OvsDB VLAN configuration after adding port is wrong!"
+        info("\nHalon-OvsDB VLAN configuration after adding port is as expected\n")
+
+        out = s1.cmd("/usr/bin/ovs-vsctl get port 1 name tag vlan_mode")
+        halon_port_name, halon_tag, halon_vlan_mode = out.splitlines()
+        out = s1.cmd("/opt/openvswitch/bin/ovs-vsctl get port 1 name tag vlan_mode")
+        ovs_port_name, ovs_tag, ovs_vlan_mode = out.splitlines()
+        assert halon_port_name == ovs_port_name and halon_tag == ovs_tag \
+               and halon_vlan_mode == ovs_vlan_mode, "Mismatch in access port configuration \
+               between Halon-OvsDB and OVS-OvsDB"
+        info("\nHalon-OvsDB access port configuration matches the Sim-OvsDB access port configuration\n")
+
+        out = s1.cmd("/usr/bin/ovs-vsctl get port 2 name trunks vlan_mode")
+        halon_port_name, halon_trunks, halon_vlan_mode = out.splitlines()
+        out = s1.cmd("/opt/openvswitch/bin/ovs-vsctl get port 2 name trunks vlan_mode")
+        ovs_port_name, ovs_trunks, ovs_vlan_mode = out.splitlines()
+        assert halon_port_name == ovs_port_name and halon_tag == ovs_tag \
+               and halon_vlan_mode == ovs_vlan_mode, "Mismatch in trunk port configuration \
+               between Halon-OvsDB and Sim-OvsDB"
+        info("\nHalon-OvsDB trunk port configuration matches the Sim-OvsDB trunk port configuration\n")
+
+        out = s1.cmd("/usr/bin/ovs-vsctl get interface 1 admin_state link_state user_config:admin hw_intf_info:mac_addr")
+        halon_admin_state, halon_link_state, halon_user_config, halon_mac_addr = out.splitlines()
+        out = s1.cmd("/opt/openvswitch/bin/ovs-vsctl get interface 1 admin_state mac_in_use")
+        ovs_admin_state, ovs_mac_addr = out.splitlines()
+        assert halon_admin_state == ovs_admin_state and halon_link_state == 'up' \
+               and halon_user_config == 'up' and halon_mac_addr == ovs_mac_addr, \
+               "Mismatch in interface configuration between Halon-OvsDB and Sim-OvsDB"        
+        info("\nHalon-OvsDB interface configuration matches the Sim-OvsDB interface configuration\n")
+
+        #Cleanup before next test
+        s1.cmd("/usr/bin/ovs-vsctl del-vlan br0 100")
+        s1.cmd("/usr/bin/ovs-vsctl del-port br0 1")
+        s1.cmd("/usr/bin/ovs-vsctl del-port br0 2")
+        s1.cmd("/usr/bin/ovs-vsctl del-br br0")
+
     def vlan_normal(self):
         '''
             1.1 Add VLAN 100 to global VLAN table on S1 and S2
@@ -71,7 +143,7 @@ class vlanTrunkTest( HalonTest ):
         h1 = self.net.hosts[ 0 ]
         h2 = self.net.hosts[ 1 ]
 
-        info("\n################### Test Case 1 - Normal VLAN trunk mode operation  ###################\n")
+        info("\n################### Test Case 2 - Normal VLAN trunk mode operation  ###################\n")
         s1.cmd("/usr/bin/ovs-vsctl add-br br0")
         s2.cmd("/usr/bin/ovs-vsctl add-br br0")
         s1.cmd("/usr/bin/ovs-vsctl add-vlan br0 100 admin=up")
@@ -122,7 +194,7 @@ class vlanTrunkTest( HalonTest ):
         h1 = self.net.hosts[ 0 ]
         h2 = self.net.hosts[ 1 ]
 
-        info("\n################### Test Case 2 - Without Global VLAN ###################\n")
+        info("\n################### Test Case 3 - Without Global VLAN ###################\n")
         s1.cmd("/usr/bin/ovs-vsctl add-br br0")
         s2.cmd("/usr/bin/ovs-vsctl add-br br0")
         s1.cmd("/usr/bin/ovs-vsctl add-port br0 1 vlan_mode=access tag=100 -- set interface 1 user_config:admin=up")
@@ -181,7 +253,7 @@ class vlanTrunkTest( HalonTest ):
         h1 = self.net.hosts[ 0 ]
         h2 = self.net.hosts[ 1 ]
 
-        info("\n################### Test Case 3 - VLAN trunk ports With Different Trunks ###################\n")
+        info("\n################### Test Case 4 - VLAN trunk ports With Different Trunks ###################\n")
         s1.cmd("/usr/bin/ovs-vsctl add-br br0")
         s2.cmd("/usr/bin/ovs-vsctl add-br br0")
         s1.cmd("/usr/bin/ovs-vsctl add-vlan br0 100 admin=up")
@@ -257,13 +329,17 @@ class Test_ovs_sim_vlan_trunk:
         del self.test
 
     # TC_1
+    def test_ovs_sim_check_config(self):
+        self.test.check_config()
+
+    # TC_2
     def test_ovs_sim_vlan_normal(self):
         self.test.vlan_normal()
 
-    # TC_2
+    # TC_3
     def test_ovs_sim_vlan_missing(self):
         self.test.vlan_missing()
 
-    # TC_3
+    # TC_4
     def test_ovs_sim_invalid_trunks(self):
         self.test.invalid_trunks()
