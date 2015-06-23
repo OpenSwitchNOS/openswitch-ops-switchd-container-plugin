@@ -350,6 +350,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
             return 0;
         }
     }
+
     for (i=0; i < s->n_slaves; i++) {
 
         ofport = ofproto_get_port(ofproto_, s->slaves[i]);
@@ -367,7 +368,6 @@ bundle_set(struct ofproto *ofproto_, void *aux,
                 VLOG_INFO("OFPROTO-SIM-PROVIDER| port %s internal port# %d",
                             netdev_get_name(ofport->netdev) , ofp_port);
         }
-
         n += snprintf(&cmd_str[n], MAX_CLI - n, " %s", netdev_get_name(ofport->netdev));
         if (n > MAX_CLI - 1) {
             VLOG_ERR("ERROR: |OFPROTO-SIM-PROVIDER| Command line string exceeds the buffer size");
@@ -553,6 +553,7 @@ static int
 set_vlan(struct ofproto *ofproto, int vid, bool add)
 {
     struct sim_provider_node *sim_ofproto = sim_provider_node_cast(ofproto);
+
     VLOG_INFO("OFPROTO-SIM-PROVIDER| %s: entry, vid=%d, oper=%s", __FUNCTION__,
               vid, (add ? "add":"del"));
     if (add) {
@@ -579,6 +580,9 @@ bundle_set_reconfigure(struct ofproto *ofproto_, int vid)
     HMAP_FOR_EACH (bundle, hmap_node, &ofproto->bundles) {
         if ((bundle->s_copy.vlan == vid) || (bundle->s_copy.trunks &&
                                             bitmap_is_set(bundle->s_copy.trunks, vid))) {
+            sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
+            VLOG_INFO("OFPROTO-SIM-PROVIDER| %s del-port %s", OVS_VSCTL, bundle->s_copy.name);
+            system(cmd_str);
             bundle_set(ofproto_, bundle->aux, &bundle->s_copy);
         } else {
             VLOG_INFO("OFPROTO-SIM-PROVIDER| VLAN Id %d doesn't match port= %s",
