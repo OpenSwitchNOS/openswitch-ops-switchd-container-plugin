@@ -368,6 +368,8 @@ static const struct netdev_class sim_class = {
     NULL,                       /* queue_dump_done */
     NULL,                       /* dump_queue_stats */
 
+    NULL,                       /* enable_l3 */
+    NULL,                       /* disable_l3 */
     NULL,                       /* get_in4 */
     NULL,                       /* set_in4 */
     NULL,                       /* get_in6 */
