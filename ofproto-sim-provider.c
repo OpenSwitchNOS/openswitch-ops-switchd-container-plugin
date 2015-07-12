@@ -190,6 +190,19 @@ construct(struct ofproto *ofproto_)
 static void
 destruct(struct ofproto *ofproto_ OVS_UNUSED)
 {
+    struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+
+    hmap_remove(&all_sim_provider_nodes, &ofproto->all_sim_provider_node);
+
+    hmap_destroy(&ofproto->bundles);
+
+    sset_destroy(&ofproto->ports);
+    sset_destroy(&ofproto->ghost_ports);
+    sset_destroy(&ofproto->port_poll_set);
+
+    ovs_mutex_destroy(&ofproto->stats_mutex);
+    ovs_mutex_destroy(&ofproto->vsp_mutex);
+
     return;
 }
 
