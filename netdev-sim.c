@@ -62,6 +62,9 @@ struct netdev_sim {
     int linux_intf_state;
     char linux_intf_name[16];
     bool is_layer3;
+    /* Indicate if rules are configured */
+    bool iptable_drop_rule_inserted;
+    bool iptable_accept_rule_inserted;
 };
 
 static int netdev_sim_construct(struct netdev *);
@@ -201,39 +204,45 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
     VLOG_DBG("hw_enable %s -- Interface %s ", hw_enable, netdev->linux_intf_name);
 
     if (hw_enable) {
+        memset(cmd, 0, sizeof(cmd));
+        memset(cmd_drop_input, 0, sizeof(cmd_drop_input));
+        memset(cmd_drop_fwd, 0, sizeof(cmd_drop_fwd));
+
         if (!strcmp(hw_enable, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE_TRUE)) {
             netdev->flags |= NETDEV_UP;
             netdev->linux_intf_state = 1;
             sprintf(cmd, "%s /sbin/ip link set dev %s up",
                     SWNS_EXEC, netdev->linux_intf_name);
-            if (!netdev->is_layer3) {
+            if (!netdev->is_layer3 && !netdev->iptable_drop_rule_inserted) {
                 sprintf(cmd_drop_input, "%s iptables -A INPUT -i %s -j DROP",
                         SWNS_EXEC, netdev->linux_intf_name);
                 sprintf(cmd_drop_fwd, "%s iptables -A FORWARD -i %s -j DROP",
                         SWNS_EXEC, netdev->linux_intf_name);
             }
+            netdev->iptable_drop_rule_inserted = 1;
 
         } else {
             netdev->flags &= ~NETDEV_UP;
             netdev->linux_intf_state = 0;
             sprintf(cmd, "%s /sbin/ip link set dev %s down",
                     SWNS_EXEC, netdev->linux_intf_name);
-            if (!netdev->is_layer3) {
+            if (!netdev->is_layer3 && netdev->iptable_drop_rule_inserted) {
                 sprintf(cmd_drop_input, "%s iptables -D INPUT -i %s -j DROP",
                         SWNS_EXEC, netdev->linux_intf_name);
                 sprintf(cmd_drop_fwd, "%s iptables -D FORWARD -i %s -j DROP",
                         SWNS_EXEC, netdev->linux_intf_name);
             }
+            netdev->iptable_drop_rule_inserted = 0;
         }
-    }
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
-    if (system(cmd_drop_input) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd_drop_input);
-    }
-    if (system(cmd_drop_fwd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd_drop_fwd);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
+        if (system(cmd_drop_input) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd_drop_input);
+        }
+        if (system(cmd_drop_fwd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd_drop_fwd);
+        }
     }
 
     netdev_change_seq_changed(netdev_);
@@ -329,39 +338,45 @@ netdev_sim_enable_l3(const struct netdev *netdev_, int vrf_id)
 
     netdev->is_layer3 = 1;
 
-    memset(&cmd, 0, 120);
+    memset(cmd, 0, sizeof(cmd));
     sprintf(cmd, "%s /sbin/ip link set dev %s up",
             SWNS_EXEC, netdev->linux_intf_name);
     if (system(cmd) != 0) {
         VLOG_ERR("system command failure: cmd=%s",cmd);
     }
 
-    memset(&cmd, 0, 120);
-    sprintf(cmd, "%s iptables -D INPUT -i %s -j DROP",
-             SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
+    if (netdev->iptable_drop_rule_inserted) {
+        memset(cmd, 0, sizeof(cmd));
+        sprintf(cmd, "%s iptables -D INPUT -i %s -j DROP",
+                SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
+
+        memset(cmd, 0, sizeof(cmd));
+        sprintf(cmd, "%s iptables -D FORWARD -i %s -j DROP",
+                SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
+        netdev->iptable_drop_rule_inserted = 0;
     }
 
-    memset(&cmd, 0, 120);
-    sprintf(cmd, "%s iptables -D FORWARD -i %s -j DROP",
-             SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
+    if (!netdev->iptable_accept_rule_inserted) {
+        memset(cmd, 0, sizeof(cmd));
+        sprintf(cmd, "%s iptables -A INPUT -i %s -j ACCEPT",
+                SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
 
-    memset(&cmd, 0, 120);
-    sprintf(cmd, "%s iptables -A INPUT -i %s -j ACCEPT",
-             SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
-
-    memset(&cmd, 0, 120);
-    sprintf(cmd, "%s iptables -A FORWARD -i %s -j ACCEPT",
-             SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
+        memset(cmd, 0, sizeof(cmd));
+        sprintf(cmd, "%s iptables -A FORWARD -i %s -j ACCEPT",
+            SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
+        netdev->iptable_accept_rule_inserted = 1;
     }
 
     netdev_change_seq_changed(netdev_);
@@ -383,29 +398,38 @@ netdev_sim_disable_l3(const struct netdev *netdev_, int vrf_id)
 
     netdev->is_layer3 = 0;
 
-    memset(&cmd, 0, 120);
-    sprintf(cmd, "%s iptables -D INPUT -i %s -j ACCEPT",
-             SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
+    if (netdev->iptable_accept_rule_inserted) {
+        memset(cmd, 0, sizeof(cmd));
+        sprintf(cmd, "%s iptables -D INPUT -i %s -j ACCEPT",
+            SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
+
+        memset(cmd, 0, sizeof(cmd));
+        sprintf(cmd, "%s iptables -D FORWARD -i %s -j ACCEPT",
+            SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
+        netdev->iptable_accept_rule_inserted = 0;
     }
-    memset(&cmd, 0, 120);
-    sprintf(cmd, "%s iptables -D FORWARD -i %s -j ACCEPT",
-             SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
-    memset(&cmd, 0, 120);
-    sprintf(cmd, "%s iptables -A INPUT -i %s -j DROP",
-             SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
-    memset(&cmd, 0, 120);
-    sprintf(cmd, "%s iptables -A FORWARD -i %s -j DROP",
-             SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
+
+    if (!netdev->iptable_drop_rule_inserted) {
+        memset(cmd, 0, sizeof(cmd));
+        sprintf(cmd, "%s iptables -A INPUT -i %s -j DROP",
+                SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
+
+        memset(cmd, 0, sizeof(cmd));
+        sprintf(cmd, "%s iptables -A FORWARD -i %s -j DROP",
+                SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
+        netdev->iptable_drop_rule_inserted = 1;
     }
 
     netdev_change_seq_changed(netdev_);
