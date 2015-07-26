@@ -70,7 +70,7 @@ struct sim_provider_ofport_node {
     struct bfd *bfd;            /* BFD, if any. */
     bool may_enable;            /* May be enabled in bonds. */
     bool is_tunnel;             /* This port is a tunnel. */
-    bool is_layer3;             /* This is a layer 3 port. *
+    bool is_layer3;             /* This is a layer 3 port. */
     long long int carrier_seq;  /* Carrier status changes. */
     struct sim_provider_ofport_node *peer;   /* Peer if patch port. */
 

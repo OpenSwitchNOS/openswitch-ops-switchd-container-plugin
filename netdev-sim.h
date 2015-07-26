@@ -20,6 +20,10 @@
 
 #include "netdev-provider.h"
 
+#define STR_EQ(s1, s2)      ((s1 != NULL) && (s2 != NULL) && \
+                             (strlen((s1)) == strlen((s2))) && \
+                             (!strncmp((s1), (s2), strlen((s2)))))
+
 /* SIM provider API. */
 void netdev_sim_register(void);
 extern int netdev_sim_get_hw_id(struct netdev *netdev);

@@ -55,14 +55,22 @@ struct netdev_sim {
 
     uint8_t hwaddr[ETH_ADDR_LEN] OVS_GUARDED;
     char hw_addr_str[18];
-    int mtu OVS_GUARDED;
     struct netdev_stats stats OVS_GUARDED;
     enum netdev_flags flags OVS_GUARDED;
 
-    int linux_intf_state;
     char linux_intf_name[16];
+    int link_state;
+    uint32_t hw_info_link_speed;
+    uint32_t link_speed;
+    uint32_t mtu;
+    bool autoneg;
+    bool pause_tx;
+    bool pause_rx;
+
     bool is_layer3;
-    /* Indicate if rules are configured */
+
+    /* Booleans to indicate if IP table rules are inserted
+     * in the system to drop incoming frames. */
     bool iptable_drop_rule_inserted;
     bool iptable_accept_rule_inserted;
 };
@@ -108,7 +116,7 @@ netdev_sim_construct(struct netdev *netdev_)
     netdev->hwaddr[5] = n;
     netdev->mtu = 1500;
     netdev->flags = 0;
-    netdev->linux_intf_state = 0;
+    netdev->link_state = 0;
 
     ovs_mutex_unlock(&netdev->mutex);
 
@@ -148,41 +156,40 @@ static int
 netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
 {
     struct netdev_sim *netdev = netdev_sim_cast(netdev_);
-    const char *hw_id = smap_get(args, "switch_intf_id");
-    const char *mac_addr = smap_get(args, "mac_addr");
-    struct ether_addr *ether_mac = NULL;
+    const char *max_speed = smap_get(args, INTERFACE_HW_INTF_INFO_MAP_MAX_SPEED);
+    const char *mac_addr = smap_get(args, INTERFACE_HW_INTF_INFO_MAP_MAC_ADDR);
     char cmd[1024];
 
     ovs_mutex_lock(&netdev->mutex);
 
-    if (hw_id != NULL) {
-        strncpy(netdev->linux_intf_name, hw_id, sizeof(netdev->linux_intf_name));
-    } else {
-        VLOG_ERR("Invalid switch interface name %s", hw_id);
-    }
+    strncpy(netdev->linux_intf_name, netdev->up.name, sizeof(netdev->linux_intf_name));
+
+    /* In simulator it is assumed that interfaces always
+     * link up at max_speed listed in hardware info. */
+    netdev->hw_info_link_speed = atoi(max_speed);
 
     if(mac_addr != NULL) {
         strncpy(netdev->hw_addr_str, mac_addr, sizeof(netdev->hw_addr_str));
     } else {
         VLOG_ERR("Invalid mac address %s", mac_addr);
     }
-    
+
     sprintf(cmd, "%s /sbin/ip link set dev %s down",
             SWNS_EXEC, netdev->linux_intf_name);
     if (system(cmd) != 0) {
-        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s",cmd);
+        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
     }
-    
+
     sprintf(cmd, "%s /sbin/ip link set %s address %s",
             SWNS_EXEC, netdev->up.name, netdev->hw_addr_str);
     if (system(cmd) != 0) {
-        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s",cmd);
+        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
     }
-    
+
     sprintf(cmd, "%s /sbin/ip link set dev %s up",
             SWNS_EXEC, netdev->linux_intf_name);
     if (system(cmd) != 0) {
-        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s",cmd);
+        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
     }
 
     ovs_mutex_unlock(&netdev->mutex);
@@ -190,59 +197,91 @@ netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
     return 0;
 }
 
+static void
+get_interface_pause_config(const char *pause_cfg, bool *pause_rx, bool *pause_tx)
+{
+    *pause_rx = false;
+    *pause_tx = false;
+
+        /* Pause configuration. */
+    if (STR_EQ(pause_cfg, INTERFACE_HW_INTF_CONFIG_MAP_PAUSE_RX)) {
+        *pause_rx = true;
+    } else if (STR_EQ(pause_cfg, INTERFACE_HW_INTF_CONFIG_MAP_PAUSE_TX)) {
+        *pause_tx = true;
+    } else if (STR_EQ(pause_cfg, INTERFACE_HW_INTF_CONFIG_MAP_PAUSE_RXTX)) {
+        *pause_rx = true;
+        *pause_tx = true;
+    }
+}
+
 static int
 netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 {
     char cmd[80], cmd_drop_input[80], cmd_drop_fwd[80];
     struct netdev_sim *netdev = netdev_sim_cast(netdev_);
-    const char *hw_enable = smap_get(args, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE);
+    const bool hw_enable = smap_get_bool(args, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE, false);
+    const bool autoneg = smap_get_bool(args, INTERFACE_HW_INTF_CONFIG_MAP_AUTONEG, false);
+    const char *pause = smap_get(args, INTERFACE_HW_INTF_CONFIG_MAP_PAUSE);
+    const int mtu = smap_get_int(args, INTERFACE_HW_INTF_CONFIG_MAP_MTU, 0);
 
     VLOG_DBG("Setting up physical interfaces, %s", netdev->linux_intf_name);
 
     ovs_mutex_lock(&netdev->mutex);
 
-    VLOG_DBG("hw_enable %s -- Interface %s ", hw_enable, netdev->linux_intf_name);
+    VLOG_DBG("Interface=%s hw_enable=%d ", netdev->linux_intf_name, hw_enable);
+
+    memset(cmd, 0, sizeof(cmd));
+    memset(cmd_drop_input, 0, sizeof(cmd_drop_input));
+    memset(cmd_drop_fwd, 0, sizeof(cmd_drop_fwd));
 
     if (hw_enable) {
-        memset(cmd, 0, sizeof(cmd));
-        memset(cmd_drop_input, 0, sizeof(cmd_drop_input));
-        memset(cmd_drop_fwd, 0, sizeof(cmd_drop_fwd));
+        netdev->flags |= NETDEV_UP;
+        netdev->link_state = 1;
 
-        if (!strcmp(hw_enable, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE_TRUE)) {
-            netdev->flags |= NETDEV_UP;
-            netdev->linux_intf_state = 1;
-            sprintf(cmd, "%s /sbin/ip link set dev %s up",
-                    SWNS_EXEC, netdev->linux_intf_name);
-            if (!netdev->is_layer3 && !netdev->iptable_drop_rule_inserted) {
-                sprintf(cmd_drop_input, "%s iptables -A INPUT -i %s -j DROP",
-                        SWNS_EXEC, netdev->linux_intf_name);
-                sprintf(cmd_drop_fwd, "%s iptables -A FORWARD -i %s -j DROP",
-                        SWNS_EXEC, netdev->linux_intf_name);
-            }
-            netdev->iptable_drop_rule_inserted = 1;
+        /* In simulator Links always come up at its max speed. */
+        netdev->link_speed = netdev->hw_info_link_speed;
+        netdev->mtu = mtu;
+        netdev->autoneg = autoneg;
+        get_interface_pause_config(pause, &(netdev->pause_rx), &(netdev->pause_tx));
 
-        } else {
-            netdev->flags &= ~NETDEV_UP;
-            netdev->linux_intf_state = 0;
-            sprintf(cmd, "%s /sbin/ip link set dev %s down",
+        sprintf(cmd, "%s /sbin/ip link set dev %s up",
+                SWNS_EXEC, netdev->linux_intf_name);
+        if (!netdev->is_layer3 && !netdev->iptable_drop_rule_inserted) {
+            sprintf(cmd_drop_input, "%s iptables -A INPUT -i %s -j DROP",
                     SWNS_EXEC, netdev->linux_intf_name);
-            if (!netdev->is_layer3 && netdev->iptable_drop_rule_inserted) {
-                sprintf(cmd_drop_input, "%s iptables -D INPUT -i %s -j DROP",
-                        SWNS_EXEC, netdev->linux_intf_name);
-                sprintf(cmd_drop_fwd, "%s iptables -D FORWARD -i %s -j DROP",
-                        SWNS_EXEC, netdev->linux_intf_name);
-            }
-            netdev->iptable_drop_rule_inserted = 0;
+            sprintf(cmd_drop_fwd, "%s iptables -A FORWARD -i %s -j DROP",
+                    SWNS_EXEC, netdev->linux_intf_name);
         }
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
+        netdev->iptable_drop_rule_inserted = 1;
+
+    } else {
+        netdev->flags &= ~NETDEV_UP;
+        netdev->link_state = 0;
+        netdev->link_speed = 0;
+        netdev->mtu = 0;
+        netdev->autoneg = false;
+        netdev->pause_tx = false;
+        netdev->pause_rx = false;
+
+
+        sprintf(cmd, "%s /sbin/ip link set dev %s down",
+                SWNS_EXEC, netdev->linux_intf_name);
+        if (!netdev->is_layer3 && netdev->iptable_drop_rule_inserted) {
+            sprintf(cmd_drop_input, "%s iptables -D INPUT -i %s -j DROP",
+                    SWNS_EXEC, netdev->linux_intf_name);
+            sprintf(cmd_drop_fwd, "%s iptables -D FORWARD -i %s -j DROP",
+                    SWNS_EXEC, netdev->linux_intf_name);
         }
-        if (system(cmd_drop_input) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd_drop_input);
-        }
-        if (system(cmd_drop_fwd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd_drop_fwd);
-        }
+        netdev->iptable_drop_rule_inserted = 0;
+    }
+    if (system(cmd) != 0) {
+        VLOG_ERR("system command failure: cmd=%s",cmd);
+    }
+    if (system(cmd_drop_input) != 0) {
+        VLOG_ERR("system command failure: cmd=%s",cmd_drop_input);
+    }
+    if (system(cmd_drop_fwd) != 0) {
+        VLOG_ERR("system command failure: cmd=%s",cmd_drop_fwd);
     }
 
     netdev_change_seq_changed(netdev_);
@@ -294,6 +333,52 @@ netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
 }
 
 static int
+netdev_sim_get_features(const struct netdev *netdev_,
+                        enum netdev_features *current,
+                        enum netdev_features *advertised,
+                        enum netdev_features *supported,
+                        enum netdev_features *peer)
+{
+    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
+
+    ovs_mutex_lock(&netdev->mutex);
+
+    *current = 0;
+
+    /* Current settings. */
+    if (netdev->link_speed == SPEED_10) {
+        *current |= NETDEV_F_10MB_FD;
+    } else if (netdev->link_speed == SPEED_100) {
+        *current |= NETDEV_F_100MB_FD;
+    } else if (netdev->link_speed == SPEED_1000) {
+        *current |= NETDEV_F_1GB_FD;
+    } else if (netdev->link_speed == SPEED_10000) {
+        *current |= NETDEV_F_10GB_FD;
+    } else if (netdev->link_speed == 40000) {
+        *current |= NETDEV_F_40GB_FD;
+    } else if (netdev->link_speed == 100000) {
+        *current |= NETDEV_F_100GB_FD;
+    }
+
+    if (netdev->autoneg) {
+        *current |= NETDEV_F_AUTONEG;
+    }
+
+    if (netdev->pause_tx && netdev->pause_rx) {
+        *current |= NETDEV_F_PAUSE;
+    } else if (netdev->pause_rx) {
+        *current |= NETDEV_F_PAUSE;
+        *current |= NETDEV_F_PAUSE_ASYM;
+    } else if (netdev->pause_tx) {
+        *current |= NETDEV_F_PAUSE_ASYM;
+    }
+
+    ovs_mutex_unlock(&netdev->mutex);
+
+    return 0;
+}
+
+static int
 netdev_sim_update_flags(struct netdev *netdev_,
                           enum netdev_flags off, enum netdev_flags on,
                           enum netdev_flags *old_flagsp)
@@ -320,7 +405,7 @@ netdev_sim_get_carrier(const struct netdev *netdev_, bool *carrier)
     struct netdev_sim *netdev = netdev_sim_cast(netdev_);
 
     ovs_mutex_lock(&netdev->mutex);
-    *carrier = netdev->linux_intf_state;
+    *carrier = netdev->link_state;
     ovs_mutex_unlock(&netdev->mutex);
 
     return 0;
@@ -475,7 +560,7 @@ static const struct netdev_class sim_class = {
     NULL,                       /* get_miimon */
     netdev_sim_get_stats,
 
-    NULL,                       /* get_features */
+    netdev_sim_get_features,    /* get_features */
     NULL,                       /* set_advertisements */
 
     NULL,                       /* set_policing */
