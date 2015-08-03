@@ -411,118 +411,7 @@ netdev_sim_get_carrier(const struct netdev *netdev_, bool *carrier)
     return 0;
 }
 
-static int
-netdev_sim_enable_l3(const struct netdev *netdev_, int vrf_id)
-{
-    char cmd[120];
-    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
 
-    VLOG_DBG("Enabling l3 for interface %s",netdev->linux_intf_name);
-
-    ovs_mutex_lock(&netdev->mutex);
-
-    netdev->is_layer3 = 1;
-
-    memset(cmd, 0, sizeof(cmd));
-    sprintf(cmd, "%s /sbin/ip link set dev %s up",
-            SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
-
-    if (netdev->iptable_drop_rule_inserted) {
-        memset(cmd, 0, sizeof(cmd));
-        sprintf(cmd, "%s iptables -D INPUT -i %s -j DROP",
-                SWNS_EXEC, netdev->linux_intf_name);
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
-        }
-
-        memset(cmd, 0, sizeof(cmd));
-        sprintf(cmd, "%s iptables -D FORWARD -i %s -j DROP",
-                SWNS_EXEC, netdev->linux_intf_name);
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
-        }
-        netdev->iptable_drop_rule_inserted = 0;
-    }
-
-    if (!netdev->iptable_accept_rule_inserted) {
-        memset(cmd, 0, sizeof(cmd));
-        sprintf(cmd, "%s iptables -A INPUT -i %s -j ACCEPT",
-                SWNS_EXEC, netdev->linux_intf_name);
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
-        }
-
-        memset(cmd, 0, sizeof(cmd));
-        sprintf(cmd, "%s iptables -A FORWARD -i %s -j ACCEPT",
-            SWNS_EXEC, netdev->linux_intf_name);
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
-        }
-        netdev->iptable_accept_rule_inserted = 1;
-    }
-
-    netdev_change_seq_changed(netdev_);
-
-    ovs_mutex_unlock(&netdev->mutex);
-
-    return 0;
-}
-
-static int
-netdev_sim_disable_l3(const struct netdev *netdev_, int vrf_id)
-{
-    char cmd[120];
-    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
-
-    VLOG_DBG("Disabling l3 for interface %s",netdev->linux_intf_name);
-
-    ovs_mutex_lock(&netdev->mutex);
-
-    netdev->is_layer3 = 0;
-
-    if (netdev->iptable_accept_rule_inserted) {
-        memset(cmd, 0, sizeof(cmd));
-        sprintf(cmd, "%s iptables -D INPUT -i %s -j ACCEPT",
-            SWNS_EXEC, netdev->linux_intf_name);
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
-        }
-
-        memset(cmd, 0, sizeof(cmd));
-        sprintf(cmd, "%s iptables -D FORWARD -i %s -j ACCEPT",
-            SWNS_EXEC, netdev->linux_intf_name);
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
-        }
-        netdev->iptable_accept_rule_inserted = 0;
-    }
-
-    if (!netdev->iptable_drop_rule_inserted) {
-        memset(cmd, 0, sizeof(cmd));
-        sprintf(cmd, "%s iptables -A INPUT -i %s -j DROP",
-                SWNS_EXEC, netdev->linux_intf_name);
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
-        }
-
-        memset(cmd, 0, sizeof(cmd));
-        sprintf(cmd, "%s iptables -A FORWARD -i %s -j DROP",
-                SWNS_EXEC, netdev->linux_intf_name);
-        if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
-        }
-        netdev->iptable_drop_rule_inserted = 1;
-    }
-
-    netdev_change_seq_changed(netdev_);
-
-    ovs_mutex_unlock(&netdev->mutex);
-
-    return 0;
-}
 
 /* Helper functions. */
 
@@ -577,8 +466,6 @@ static const struct netdev_class sim_class = {
     NULL,                       /* queue_dump_done */
     NULL,                       /* dump_queue_stats */
 
-    netdev_sim_enable_l3,       /* enable_l3 */
-    netdev_sim_disable_l3,      /* disable_l3 */
     NULL,                       /* get_in4 */
     NULL,                       /* set_in4 */
     NULL,                       /* get_in6 */
