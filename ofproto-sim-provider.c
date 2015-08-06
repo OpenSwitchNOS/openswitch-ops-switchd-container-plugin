@@ -328,18 +328,26 @@ disable_l3(const char *intf_name)
 {
     char cmd[MAX_CMD_LEN];
 
-    memset(cmd, 0, sizeof(cmd));
-    snprintf(cmd, MAX_CMD_LEN, "%s iptables -A INPUT -i %s -j DROP",
-        SWNS_EXEC, intf_name);
+    snprintf(cmd, MAX_CMD_LEN, "%s iptables -C INPUT -i %s -j DROP",
+            SWNS_EXEC, intf_name);
+    /*
+     * Do not add drop rules if the "Check" command returned silently.
+     * Silent return means that the check command passed and a rule exists
+     */
     if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
+        memset(cmd, 0, sizeof(cmd));
+        snprintf(cmd, MAX_CMD_LEN, "%s iptables -A INPUT -i %s -j DROP",
+            SWNS_EXEC, intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
 
-    memset(cmd, 0, sizeof(cmd));
-    snprintf(cmd, MAX_CMD_LEN, "%s iptables -A FORWARD -i %s -j DROP",
-        SWNS_EXEC, intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
+        memset(cmd, 0, sizeof(cmd));
+        snprintf(cmd, MAX_CMD_LEN, "%s iptables -A FORWARD -i %s -j DROP",
+            SWNS_EXEC, intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("system command failure: cmd=%s",cmd);
+        }
     }
 }
 
@@ -403,9 +411,6 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         if (n > MAX_CLI - 1) {
             VLOG_ERR("Command line string exceeds the buffer size");
             return 0;
-        }
-        if (strcmp(ofproto->up.type, "vrf")) {
-            disable_l3(ofproto->up.name);
         }
     } else {
         n = snprintf(cmd_str, MAX_CLI - n, "%s add-bond %s %s", OVS_VSCTL, ofproto->up.name, s->name);

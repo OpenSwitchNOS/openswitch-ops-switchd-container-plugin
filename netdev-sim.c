@@ -66,13 +66,6 @@ struct netdev_sim {
     bool autoneg;
     bool pause_tx;
     bool pause_rx;
-
-    bool is_layer3;
-
-    /* Booleans to indicate if IP table rules are inserted
-     * in the system to drop incoming frames. */
-    bool iptable_drop_rule_inserted;
-    bool iptable_accept_rule_inserted;
 };
 
 static int netdev_sim_construct(struct netdev *);
@@ -217,7 +210,7 @@ get_interface_pause_config(const char *pause_cfg, bool *pause_rx, bool *pause_tx
 static int
 netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 {
-    char cmd[80], cmd_drop_input[80], cmd_drop_fwd[80];
+    char cmd[80];
     struct netdev_sim *netdev = netdev_sim_cast(netdev_);
     const bool hw_enable = smap_get_bool(args, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE, false);
     const bool autoneg = smap_get_bool(args, INTERFACE_HW_INTF_CONFIG_MAP_AUTONEG, false);
@@ -231,8 +224,6 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
     VLOG_DBG("Interface=%s hw_enable=%d ", netdev->linux_intf_name, hw_enable);
 
     memset(cmd, 0, sizeof(cmd));
-    memset(cmd_drop_input, 0, sizeof(cmd_drop_input));
-    memset(cmd_drop_fwd, 0, sizeof(cmd_drop_fwd));
 
     if (hw_enable) {
         netdev->flags |= NETDEV_UP;
@@ -246,14 +237,6 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 
         sprintf(cmd, "%s /sbin/ip link set dev %s up",
                 SWNS_EXEC, netdev->linux_intf_name);
-        if (!netdev->is_layer3 && !netdev->iptable_drop_rule_inserted) {
-            sprintf(cmd_drop_input, "%s iptables -A INPUT -i %s -j DROP",
-                    SWNS_EXEC, netdev->linux_intf_name);
-            sprintf(cmd_drop_fwd, "%s iptables -A FORWARD -i %s -j DROP",
-                    SWNS_EXEC, netdev->linux_intf_name);
-        }
-        netdev->iptable_drop_rule_inserted = 1;
-
     } else {
         netdev->flags &= ~NETDEV_UP;
         netdev->link_state = 0;
@@ -263,25 +246,11 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
         netdev->pause_tx = false;
         netdev->pause_rx = false;
 
-
         sprintf(cmd, "%s /sbin/ip link set dev %s down",
                 SWNS_EXEC, netdev->linux_intf_name);
-        if (!netdev->is_layer3 && netdev->iptable_drop_rule_inserted) {
-            sprintf(cmd_drop_input, "%s iptables -D INPUT -i %s -j DROP",
-                    SWNS_EXEC, netdev->linux_intf_name);
-            sprintf(cmd_drop_fwd, "%s iptables -D FORWARD -i %s -j DROP",
-                    SWNS_EXEC, netdev->linux_intf_name);
-        }
-        netdev->iptable_drop_rule_inserted = 0;
     }
     if (system(cmd) != 0) {
         VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
-    if (system(cmd_drop_input) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd_drop_input);
-    }
-    if (system(cmd_drop_fwd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd_drop_fwd);
     }
 
     netdev_change_seq_changed(netdev_);
