@@ -67,8 +67,8 @@ class vlanTrunkTest( HalonTest ):
         h1 = self.net.hosts[ 0 ]
         h2 = self.net.hosts[ 1 ]
 
-        info("\n################### Test Case 1 - Check configuration between Halon-OvsDB \
-        and Sim-OvsDB ###################\n")
+        info("\n################### Test Case 1 - Check configuration between Halon-OvsDB "\
+             "and Sim-OvsDB ###################\n")
         info('\nTesting to check if configuration is as expected in the Halon-OvsDB and Sim-OvsDB\n')
 
         s1.cmd("/usr/bin/ovs-vsctl add-br br0")
@@ -83,13 +83,12 @@ class vlanTrunkTest( HalonTest ):
         out = s1.cmd("/usr/bin/ovs-vsctl get vlan VLAN100 admin oper_state oper_state_reason")
         halon_admin_state, halon_oper_state, halon_oper_state_reason = out.splitlines()
         assert halon_admin_state == 'up' and halon_oper_state == 'down' \
-               and halon_oper_state_reason == 'no_member_port', "Halon-OvsDB VLAN configuration \
-               before adding port is wrong!"
+               and halon_oper_state_reason == 'no_member_port', "Halon-OvsDB VLAN configuration "\
+               "before adding port is wrong!"
         info("\nHalon-OvsDB VLAN configuration before adding port is as expected\n")
 
         s1.cmd("/usr/bin/ovs-vsctl add-port br0 1 vlan_mode=access tag=100 -- set interface 1 user_config:admin=up")
         s1.cmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=trunk trunks=100 -- set interface 2 user_config:admin=up")
-        s1.cmd("/usr/bin/ovs-vsctl set interface 1 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
         time.sleep(1)
 
         out = s1.cmd("/usr/bin/ovs-vsctl get vlan VLAN100 oper_state oper_state_reason")
@@ -103,8 +102,8 @@ class vlanTrunkTest( HalonTest ):
         out = s1.cmd("/opt/openvswitch/bin/ovs-vsctl get port 1 name tag vlan_mode")
         ovs_port_name, ovs_tag, ovs_vlan_mode = out.splitlines()
         assert halon_port_name == ovs_port_name and halon_tag == ovs_tag \
-               and halon_vlan_mode == ovs_vlan_mode, "Mismatch in access port configuration \
-               between Halon-OvsDB and OVS-OvsDB"
+               and halon_vlan_mode == ovs_vlan_mode, "Mismatch in access port configuration "\
+               "between Halon-OvsDB and OVS-OvsDB"
         info("\nHalon-OvsDB access port configuration matches the Sim-OvsDB access port configuration\n")
 
         out = s1.cmd("/usr/bin/ovs-vsctl get port 2 name trunks vlan_mode")
@@ -112,8 +111,8 @@ class vlanTrunkTest( HalonTest ):
         out = s1.cmd("/opt/openvswitch/bin/ovs-vsctl get port 2 name trunks vlan_mode")
         ovs_port_name, ovs_trunks, ovs_vlan_mode = out.splitlines()
         assert halon_port_name == ovs_port_name and halon_tag == ovs_tag \
-               and halon_vlan_mode == ovs_vlan_mode, "Mismatch in trunk port configuration \
-               between Halon-OvsDB and Sim-OvsDB"
+               and halon_vlan_mode == ovs_vlan_mode, "Mismatch in trunk port configuration "\
+               "between Halon-OvsDB and Sim-OvsDB"
         info("\nHalon-OvsDB trunk port configuration matches the Sim-OvsDB trunk port configuration\n")
 
         out = s1.cmd("/usr/bin/ovs-vsctl get interface 1 admin_state link_state user_config:admin hw_intf_info:mac_addr")
@@ -153,16 +152,15 @@ class vlanTrunkTest( HalonTest ):
         s1.cmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=trunk trunks=100 -- set interface 2 user_config:admin=up")
         s2.cmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=trunk trunks=100 -- set interface 2 user_config:admin=up")
 
-        # HALON_TODO: Soon we will have a mechanism to tell PMD via ovs-appctl to simulate a Pluggable module.
-        # Once we have that mechanism we need to remove this hard wired modifications to Interface table shown in the 4 lines below.
-        s1.cmd("/usr/bin/ovs-vsctl set interface 1 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s2.cmd("/usr/bin/ovs-vsctl set interface 1 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s1.cmd("/usr/bin/ovs-vsctl set interface 2 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s2.cmd("/usr/bin/ovs-vsctl set interface 2 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-
         info("\nThis test will test the normal VLAN trunk mode operation by making required configurations\n")
         out = h1.cmd("ping -c1 %s" % h2.IP())
         info(out)
+
+        status = parsePing(out)
+        if status:
+            info("\nPing Success\n")
+        else:
+            assert 0, "Ping Failed even though VLAN was configured correctly"
 
         #Cleanup before next test
         s1.cmd("/usr/bin/ovs-vsctl del-vlan br0 100")
@@ -173,12 +171,6 @@ class vlanTrunkTest( HalonTest ):
         s2.cmd("/usr/bin/ovs-vsctl del-port 2")
         s1.cmd("/usr/bin/ovs-vsctl del-br br0")
         s2.cmd("/usr/bin/ovs-vsctl del-br br0")
-
-        status = parsePing(out)
-        if status:
-            info("\nPing Success\n")
-        else:
-            assert 0, "Ping Failed even though VLAN was configured correctly"
 
     def vlan_missing(self):
         '''
@@ -201,10 +193,6 @@ class vlanTrunkTest( HalonTest ):
         s2.cmd("/usr/bin/ovs-vsctl add-port br0 1 vlan_mode=access tag=100 -- set interface 1 user_config:admin=up")
         s1.cmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=trunk trunks=100 -- set interface 2 user_config:admin=up")
         s2.cmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=trunk trunks=100 -- set interface 2 user_config:admin=up")
-        s1.cmd("/usr/bin/ovs-vsctl set interface 1 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s2.cmd("/usr/bin/ovs-vsctl set interface 1 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s1.cmd("/usr/bin/ovs-vsctl set interface 2 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s2.cmd("/usr/bin/ovs-vsctl set interface 2 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
 
         info("\nTesting if ping fails when the VLAN is not present in the global VLAN table\n\n")
         out = h1.cmd("ping -c1 %s" % h2.IP())
@@ -219,9 +207,17 @@ class vlanTrunkTest( HalonTest ):
         info("\n################### Adding Global VLAN ###################\n")
         info("\n### Adding VLAN100. Ports 1,2 get reconfigured for trunks=100 ###\n\n")
         s1.cmd("/usr/bin/ovs-vsctl add-vlan br0 100 admin=up")
+        time.sleep(1)
         s2.cmd("/usr/bin/ovs-vsctl add-vlan br0 100 admin=up")
+        time.sleep(1)
         out = h1.cmd("ping -c1 %s" % h2.IP())
         info(out)
+
+        status = parsePing(out)
+        if status:
+            info("\nPing Success\n")
+        else:
+            assert 0, "Ping Failed even though global VLAN was configured properly"
 
         #Cleanup before next test
         s1.cmd("/usr/bin/ovs-vsctl del-vlan br0 100")
@@ -232,12 +228,6 @@ class vlanTrunkTest( HalonTest ):
         s2.cmd("/usr/bin/ovs-vsctl del-port 2")
         s1.cmd("/usr/bin/ovs-vsctl del-br br0")
         s2.cmd("/usr/bin/ovs-vsctl del-br br0")
-
-        status = parsePing(out)
-        if status:
-            info("\nPing Success\n")
-        else:
-            assert 0, "Ping Failed even though global VLAN was configured properly"
 
     def invalid_trunks(self):
         '''
@@ -262,10 +252,6 @@ class vlanTrunkTest( HalonTest ):
         s2.cmd("/usr/bin/ovs-vsctl add-port br0 1 vlan_mode=access tag=100 -- set interface 1 user_config:admin=up")
         s1.cmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=trunk trunks=100 -- set interface 2 user_config:admin=up")
         s2.cmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=trunk trunks=200 -- set interface 2 user_config:admin=up")
-        s1.cmd("/usr/bin/ovs-vsctl set interface 1 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s2.cmd("/usr/bin/ovs-vsctl set interface 1 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s1.cmd("/usr/bin/ovs-vsctl set interface 2 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
-        s2.cmd("/usr/bin/ovs-vsctl set interface 2 pm_info:connector=SFP_RJ45 pm_info:connector_status=supported")
 
         info("\n\nTesting if ping fails when the VLAN trunk ports have different trunks ex: 100 & 200\n\n")
         out = h1.cmd("ping -c1 %s" % h2.IP())
@@ -284,6 +270,12 @@ class vlanTrunkTest( HalonTest ):
         out = h1.cmd("ping -c1 %s" % h2.IP())
         info(out)
 
+        status = parsePing(out)
+        if status:
+            info("\nPing Success\n")
+        else:
+            assert 0, "Ping Failed even though VLAN trunk ports had the same trunk"
+
         #Cleanup before next test
         s1.cmd("/usr/bin/ovs-vsctl del-vlan br0 100")
         s2.cmd("/usr/bin/ovs-vsctl del-vlan br0 100")
@@ -294,16 +286,7 @@ class vlanTrunkTest( HalonTest ):
         s1.cmd("/usr/bin/ovs-vsctl del-br br0")
         s2.cmd("/usr/bin/ovs-vsctl del-br br0")
 
-        status = parsePing(out)
-        if status:
-            info("\nPing Success\n")
-        else:
-            assert 0, "Ping Failed even though VLAN trunk ports had the same trunk"
-
 class Test_ovs_sim_vlan_trunk:
-
-    # Create the Mininet topology based on mininet.
-    test = vlanTrunkTest()
 
     def setup(self):
         pass
@@ -312,7 +295,7 @@ class Test_ovs_sim_vlan_trunk:
         pass
 
     def setup_class(cls):
-        pass
+        Test_ovs_sim_vlan_trunk.test = vlanTrunkTest()
 
     def teardown_class(cls):
         # Stop the Docker containers, and
