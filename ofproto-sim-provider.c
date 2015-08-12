@@ -405,20 +405,24 @@ bundle_set(struct ofproto *ofproto_, void *aux,
                s->vlan_mode == PORT_VLAN_NATIVE_TAGGED ? "NATIVE TAGGED" : "UNKNOWN",
                s->name);
 
-    if (s->n_slaves == 1) {
+    if (s->n_slaves == 1 && (s->n_slaves == s->slaves_entered)) {
         n = snprintf(cmd_str, MAX_CLI - n, "%s add-port %s", OVS_VSCTL, ofproto->up.name);
         VLOG_DBG("%s add-port %s", OVS_VSCTL, ofproto->up.name);
         if (n > MAX_CLI - 1) {
             VLOG_ERR("Command line string exceeds the buffer size");
             return 0;
         }
-    } else {
+    } else if (s->n_slaves == s->slaves_entered) {
+        n = snprintf(cmd_str, MAX_CLI - n, "%s del-port %s", OVS_VSCTL, s->name);
+        system(cmd_str);
         n = snprintf(cmd_str, MAX_CLI - n, "%s add-bond %s %s", OVS_VSCTL, ofproto->up.name, s->name);
         VLOG_DBG("%s add-bond %s %s", OVS_VSCTL, ofproto->up.name, s->name);
         if (n > MAX_CLI - 1) {
             VLOG_ERR("Command line string exceeds the buffer size");
             return 0;
         }
+    } else {
+        return 0;
     }
 
     for (i=0; i < s->n_slaves; i++) {
@@ -565,7 +569,6 @@ bundle_delete(struct ofport *ofport)
 
     HMAP_FOR_EACH (bundle, hmap_node, &ofproto->bundles) {
         if (!strcmp(bundle->s_copy.name, netdev_get_name(ofport->netdev))) {
-
             if (strcmp(ofport->ofproto->type, "vrf")) {
                 sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
                 VLOG_DBG("%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
@@ -574,41 +577,21 @@ bundle_delete(struct ofport *ofport)
             }
             bundle_destroy(bundle, ofport->ofproto);
             return;
-        } else if (bundle->s_copy.bond) {
+        } else if (bundle->s_copy.name) {
             volatile struct ofport *ofport_loop;
             int i, j;
-
-            for (i = 0; i < bundle->s_copy.n_slaves; i++) {
-                ofport_loop = ofproto_get_port(ofport->ofproto, bundle->s_copy.slaves[i]);
-
-                if (ofport_loop && (ofport->ofp_port == ofport_loop->ofp_port)) {
-                    if (strcmp(ofport->ofproto->type, "vrf")) {
-                        sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, netdev_get_name(ofport_loop->netdev));
-                        VLOG_DBG("%s del-port %s", OVS_VSCTL,
-                                  netdev_get_name(ofport_loop->netdev));
-                        system(cmd_str);
-                        enable_l3(netdev_get_name(ofport_loop->netdev));
-                    }
-                    /* Delete a slave from slave count */
-                    bundle->s_copy.n_slaves--;
-                    /* Compact slave list by shifting up slaves following the one we are deleting */
-                    for (j=i; j < bundle->s_copy.n_slaves; j++) {
-                        bundle->s_copy.slaves[j] = bundle->s_copy.slaves[j+1];
-                    }
-                    break;
+            if (strcmp(ofport->ofproto->type, "vrf")) {
+                sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
+                VLOG_DBG("%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
+                system(cmd_str);
+                enable_l3(bundle->s_copy.name);
+                for (i = 0; i < bundle->s_copy.slaves_entered; i++) {
+                    ofport_loop = ofproto_get_port(ofport->ofproto, bundle->s_copy.slaves[i]);
+                    enable_l3(netdev_get_name(ofport_loop->netdev));
                 }
             }
-            for (i = 0; i < bundle->s_copy.n_slaves; i++)
-            if (bundle->s_copy.n_slaves == 0) {
-                if (strcmp(ofport->ofproto->type, "vrf")) {
-                    sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                    VLOG_DBG("%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                    system(cmd_str);
-                    enable_l3(bundle->s_copy.name);
-                }
-                bundle_destroy(bundle, ofport->ofproto);
-                return;
-            }
+            bundle_destroy(bundle, ofport->ofproto);
+            return;
         }
     }
 }
