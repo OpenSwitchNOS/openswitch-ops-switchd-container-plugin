@@ -388,7 +388,11 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         } else {
             s_copy->trunks = NULL;
         }
+        if (s->bond != NULL) {
+            s_copy->bond->name = xstrdup(s->bond->name);
+        }
     }
+
     int vlan = (s->vlan_mode == PORT_VLAN_TRUNK ? -1
             : s->vlan >= 0 && s->vlan <= 4095 ? s->vlan
             : 0);
@@ -557,6 +561,12 @@ bundle_destroy(struct ofbundle *bundle, struct ofproto *ofproto_)
         bitmap_free(bundle->s_copy.trunks);
     }
 
+    if (bundle->s_copy.bond != NULL ) {
+        if (bundle->s_copy.bond->name) {
+            free(bundle->s_copy.bond->name);
+        }
+    }
+
     free(bundle);
 }
 
@@ -577,21 +587,23 @@ bundle_delete(struct ofport *ofport)
             }
             bundle_destroy(bundle, ofport->ofproto);
             return;
-        } else if (bundle->s_copy.name) {
-            volatile struct ofport *ofport_loop;
-            int i, j;
-            if (strcmp(ofport->ofproto->type, "vrf")) {
-                sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                VLOG_DBG("%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                system(cmd_str);
-                enable_l3(bundle->s_copy.name);
-                for (i = 0; i < bundle->s_copy.slaves_entered; i++) {
-                    ofport_loop = ofproto_get_port(ofport->ofproto, bundle->s_copy.slaves[i]);
-                    enable_l3(netdev_get_name(ofport_loop->netdev));
+        } else if (bundle->s_copy.bond != NULL) {
+            if (!strcmp(bundle->s_copy.bond->name, bundle->s_copy.name)) {
+                volatile struct ofport *ofport_loop;
+                int i, j;
+                if (strcmp(ofport->ofproto->type, "vrf")) {
+                    sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
+                    VLOG_DBG("%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
+                    system(cmd_str);
+                    enable_l3(bundle->s_copy.name);
+                    for (i = 0; i < bundle->s_copy.slaves_entered; i++) {
+                        ofport_loop = ofproto_get_port(ofport->ofproto, bundle->s_copy.slaves[i]);
+                        enable_l3(netdev_get_name(ofport_loop->netdev));
+                    }
                 }
+                bundle_destroy(bundle, ofport->ofproto);
+                return;
             }
-            bundle_destroy(bundle, ofport->ofproto);
-            return;
         }
     }
 }
