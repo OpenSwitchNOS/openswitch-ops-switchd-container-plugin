@@ -49,6 +49,9 @@ COVERAGE_DEFINE(rev_reconfigure_sim);
 COVERAGE_DEFINE(rev_bond_sim);
 COVERAGE_DEFINE(rev_port_toggled_sim);
 
+#define MAX_CMD_LEN 128
+#define SWNS_EXEC "/sbin/ip netns exec swns"
+
 static int
 bundle_set_reconfigure(struct ofproto *ofproto_, int vid);
 
@@ -154,15 +157,19 @@ construct(struct ofproto *ofproto_)
             error = 1;
         }
 
-        sprintf(ovs_addbr, "%s set br %s datapath_type=netdev",
-            OVS_VSCTL, ofproto->up.name);
+        sprintf(ovs_addbr, "%s set br %s datapath_type=netdev", OVS_VSCTL, ofproto->up.name);
         if (system(ovs_addbr) != 0) {
             VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
             error = 1;
         }
 
-        sprintf(ovs_addbr, "%s set port %s trunks=0",
-            OVS_VSCTL, ofproto->up.name);
+        sprintf(ovs_addbr, "%s set port %s trunks=0", OVS_VSCTL, ofproto->up.name);
+        if (system(ovs_addbr) != 0) {
+            VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
+            error = 1;
+        }
+
+        sprintf(ovs_addbr, "%s /sbin/ip link set dev %s up", SWNS_EXEC, ofproto->up.name);
         if (system(ovs_addbr) != 0) {
             VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
             error = 1;
@@ -310,9 +317,6 @@ bundle_lookup(const struct sim_provider_node *ofproto, void *aux)
     }
     return NULL;
 }
-
-#define MAX_CMD_LEN 128
-#define SWNS_EXEC "/sbin/ip netns exec swns"
 
 static void
 enable_l3(const char *intf_name)
