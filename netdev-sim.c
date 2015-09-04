@@ -159,7 +159,8 @@ netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
 
     /* In simulator it is assumed that interfaces always
      * link up at max_speed listed in hardware info. */
-    netdev->hw_info_link_speed = atoi(max_speed);
+    if(max_speed)
+        netdev->hw_info_link_speed = atoi(max_speed);
 
     if(mac_addr != NULL) {
         strncpy(netdev->hw_addr_str, mac_addr, sizeof(netdev->hw_addr_str));
@@ -233,7 +234,8 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
         netdev->link_speed = netdev->hw_info_link_speed;
         netdev->mtu = mtu;
         netdev->autoneg = autoneg;
-        get_interface_pause_config(pause, &(netdev->pause_rx), &(netdev->pause_tx));
+        if(pause)
+            get_interface_pause_config(pause, &(netdev->pause_rx), &(netdev->pause_tx));
 
         sprintf(cmd, "%s /sbin/ip link set dev %s up",
                 SWNS_EXEC, netdev->linux_intf_name);
@@ -454,8 +456,78 @@ static const struct netdev_class sim_class = {
     NULL,                       /* rxq_drain */
 };
 
+static const struct netdev_class sim_internal_class = {
+    "internal",
+    NULL,                       /* init */
+    netdev_sim_run,
+    NULL,                       /* wait */
+
+    netdev_sim_alloc,
+    netdev_sim_construct,
+    netdev_sim_destruct,
+    netdev_sim_dealloc,
+    NULL,                       /* get_config */
+    NULL,                       /* set_config */
+    netdev_sim_set_hw_intf_info,
+    netdev_sim_set_hw_intf_config,
+    NULL,                       /* get_tunnel_config */
+    NULL,                       /* build header */
+    NULL,                       /* push header */
+    NULL,                       /* pop header */
+    NULL,                       /* get_numa_id */
+    NULL,                       /* set_multiq */
+
+    NULL,                       /* send */
+    NULL,                       /* send_wait */
+
+    netdev_sim_set_etheraddr,
+    netdev_sim_get_etheraddr,
+    NULL,                       /* get_mtu */
+    NULL,                       /* set_mtu */
+    NULL,                       /* get_ifindex */
+    netdev_sim_get_carrier,
+    NULL,                       /* get_carrier_resets */
+    NULL,                       /* get_miimon */
+    netdev_sim_get_stats,
+
+    netdev_sim_get_features,    /* get_features */
+    NULL,                       /* set_advertisements */
+
+    NULL,                       /* set_policing */
+    NULL,                       /* get_qos_types */
+    NULL,                       /* get_qos_capabilities */
+    NULL,                       /* get_qos */
+    NULL,                       /* set_qos */
+    NULL,                       /* get_queue */
+    NULL,                       /* set_queue */
+    NULL,                       /* delete_queue */
+    NULL,                       /* get_queue_stats */
+    NULL,                       /* queue_dump_start */
+    NULL,                       /* queue_dump_next */
+    NULL,                       /* queue_dump_done */
+    NULL,                       /* dump_queue_stats */
+
+    NULL,                       /* get_in4 */
+    NULL,                       /* set_in4 */
+    NULL,                       /* get_in6 */
+    NULL,                       /* add_router */
+    NULL,                       /* get_next_hop */
+    NULL,                       /* get_status */
+    NULL,                       /* arp_lookup */
+
+    netdev_sim_update_flags,
+
+    NULL,                       /* rxq_alloc */
+    NULL,                       /* rxq_construct */
+    NULL,                       /* rxq_destruct */
+    NULL,                       /* rxq_dealloc */
+    NULL,                       /* rxq_recv */
+    NULL,                       /* rxq_wait */
+    NULL,                       /* rxq_drain */
+};
 void
 netdev_sim_register(void)
 {
     netdev_register_provider(&sim_class);
+    netdev_register_provider(&sim_internal_class);
 }
