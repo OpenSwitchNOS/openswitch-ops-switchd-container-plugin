@@ -1122,4 +1122,10 @@ const struct ofproto_class ofproto_sim_provider_class = {
 #if 0
     set_config,                  /* set_config options */
 #endif
+#ifdef HALON
+    NULL,                       /* add_l3_host_entry */
+    NULL,                       /* delete_l3_host_entry */
+    NULL,                       /* get_l3_host_hit */
+    NULL,                       /* l3_route_action */
+#endif
 };
