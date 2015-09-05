@@ -145,7 +145,8 @@ struct sim_provider_node {
     struct guarded_list pins;      /* Contains "struct ofputil_packet_in"s. */
     struct seq *pins_seq;          /* For notifying 'pins' reception. */
     uint64_t pins_seqno;
-    unsigned long *vlans_bmp; /* 4096-bit bitmap of in-use VLANs. */
+    unsigned long *vlans_bmp;      /* 4096-bit bitmap of in-use VLANs. */
+    unsigned long *vlan_intf_bmp;  /* 4096 bitmap of vlan interfaces */
 };
 
 struct sim_provider_port_dump_state {
