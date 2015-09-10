@@ -120,7 +120,7 @@ del(const char *type OVS_UNUSED, const char *name OVS_UNUSED)
 static const char *
 port_open_type(const char *datapath_type OVS_UNUSED, const char *port_type)
 {
-    if(port_type && !strcmp(port_type, INTERFACE_TYPE_INTERNAL)) {
+    if(port_type && (strcmp(port_type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0)) {
         return port_type;
     }
     return "system";
@@ -435,9 +435,9 @@ bundle_set(struct ofproto *ofproto_, void *aux,
      * on  internal vlan interfaces created on top of bridge.
      * Skip this for internal interface is bridge internal
      * interface with same name as bridge */
-    if(!strcmp(type, INTERFACE_TYPE_INTERNAL) && vlan_id &&
-            s->n_slaves == 1 &&
-            strcmp(bundle->name, ofproto->up.name)) {
+    if((strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) && vlan_id &&
+       (s->n_slaves == 1) && (strcmp(bundle->name, ofproto->up.name) != 0)) {
+
         if(strcmp(ofproto->up.type, "vrf")) {
             VLOG_INFO("bridge %s %s vland id %d", ofproto->up.name, type, vlan_id);
             bitmap_set1(ofproto->vlan_intf_bmp, vlan_id);
@@ -631,7 +631,7 @@ bundle_destroy(struct ofbundle *bundle, struct ofproto *ofproto_)
         type = netdev_get_type(port->up.netdev);
         vlan_id = bundle->vlan;
         VLOG_DBG("bundle_destroy: bridge %s %s vland id %d", ofproto->up.name, type, vlan_id);
-        if(!strcmp(type, INTERFACE_TYPE_INTERNAL) && vlan_id) {
+        if((strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) && vlan_id) {
             bitmap_set0(ofproto->vlan_intf_bmp, bundle->vlan);
             n = snprintf(cmd_str, MAX_CLI - n, "%s set port %s ", OVS_VSCTL, ofproto->up.name);
             for (i=0; i < 4095; i++) {
