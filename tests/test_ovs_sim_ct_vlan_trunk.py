@@ -121,7 +121,7 @@ class vlanTrunkTest( HalonTest ):
         ovs_admin_state, ovs_mac_addr = out.splitlines()
         assert halon_admin_state == ovs_admin_state and halon_link_state == 'up' \
                and halon_user_config == 'up' and halon_mac_addr == ovs_mac_addr, \
-               "Mismatch in interface configuration between Halon-OvsDB and Sim-OvsDB"        
+               "Mismatch in interface configuration between Halon-OvsDB and Sim-OvsDB"
         info("\nHalon-OvsDB interface configuration matches the Sim-OvsDB interface configuration\n")
 
         #Cleanup before next test
