@@ -40,7 +40,7 @@
 #include "vlan-bitmap.h"
 #include "openvswitch/vlog.h"
 #include "ofproto-sim-provider.h"
-#include <openhalon-idl.h>
+#include <vswitch-idl.h>
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
@@ -385,7 +385,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     struct ofproto_bundle_settings *s_copy;
     struct sim_provider_ofport_node *port;
     int vlan_id;
-    const char * type;
+    const char *type = NULL;
 
     if (s == NULL) {
         return ENODEV;
@@ -428,14 +428,17 @@ bundle_set(struct ofproto *ofproto_, void *aux,
 
     VLOG_DBG("bridge/vrf name %s port name %s", ofproto->up.name, bundle->name);
     port = sim_provider_ofport_node_cast(ofproto_get_port(ofproto_, s->slaves[0]));
-    type = netdev_get_type(port->up.netdev);
+    if(port) {
+       type = netdev_get_type(port->up.netdev);
+    }
+
     vlan_id = s->vlan;
 
     /* Configure trunk for bridge interface so we receive vlan frames
      * on  internal vlan interfaces created on top of bridge.
      * Skip this for internal interface is bridge internal
      * interface with same name as bridge */
-    if((strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) && vlan_id &&
+    if(type && (strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) && vlan_id &&
        (s->n_slaves == 1) && (strcmp(bundle->name, ofproto->up.name) != 0)) {
 
         if(strcmp(ofproto->up.type, "vrf")) {
@@ -626,12 +629,14 @@ bundle_destroy(struct ofbundle *bundle, struct ofproto *ofproto_)
             strcmp(bundle->name, ofproto->up.name)) {
         struct sim_provider_ofport_node *port;
         int i, vlan_id, vlan_count = 0;
-        const char * type;
+        const char *type = NULL;
         port = sim_provider_ofport_node_cast(ofproto_get_port(ofproto_, bundle->s_copy.slaves[0]));
-        type = netdev_get_type(port->up.netdev);
+        if(port) {
+            type = netdev_get_type(port->up.netdev);
+        }
         vlan_id = bundle->vlan;
         VLOG_DBG("bundle_destroy: bridge %s %s vland id %d", ofproto->up.name, type, vlan_id);
-        if((strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) && vlan_id) {
+        if(type && (strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) && vlan_id) {
             bitmap_set0(ofproto->vlan_intf_bmp, bundle->vlan);
             n = snprintf(cmd_str, MAX_CLI - n, "%s set port %s ", OVS_VSCTL, ofproto->up.name);
             for (i=0; i < 4095; i++) {
