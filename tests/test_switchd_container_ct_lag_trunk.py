@@ -390,8 +390,6 @@ class lagTrunkTest( OpsVsiTest ):
         s1.ovscmd("/usr/bin/ovs-vsctl del-br br0")
         s2.ovscmd("/usr/bin/ovs-vsctl del-br br0")
 
-@pytest.mark.skipif(True, \
-reason="Skipping %s as it does not work" % basename(__file__))
 class Test_switchd_container_lag_trunk:
 
     def setup_class(cls):
