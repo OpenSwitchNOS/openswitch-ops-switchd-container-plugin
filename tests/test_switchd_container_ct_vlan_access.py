@@ -31,6 +31,7 @@ class vlanAccessTest( OpsVsiTest ):
                            controller=None, build=True)
 
     def check_config(self):
+
         '''Check configuration changes in OpenSwitch-OvsDB and ''' \
         '''Sim-OvsDB for proper values'''
         s1 = self.net.switches[ 0 ]
@@ -145,54 +146,6 @@ class vlanAccessTest( OpsVsiTest ):
         s1.ovscmd("/usr/bin/ovs-vsctl del-port br0 2")
         s1.ovscmd("/usr/bin/ovs-vsctl del-br br0")
 
-    def vlan_missing(self):
-        '''
-            3.1 Dont add VLAN 100 to global VLAN table
-            3.2 Add port 1 with tag 100
-            3.3 Add port 2 with tag 100
-            3.4 Test Ping - should not work
-            3.5 Add VLAN 100 to global VLAN table
-            3.6 Test Ping - should work
-        '''
-        s1 = self.net.switches[ 0 ]
-        h1 = self.net.hosts[ 0 ]
-        h2 = self.net.hosts[ 1 ]
-
-        info("\n########## Test Case 3 - Without global VLAN ##########\n")
-        s1.ovscmd("/usr/bin/ovs-vsctl add-br br0")
-        s1.ovscmd("/usr/bin/ovs-vsctl add-port br0 1 vlan_mode=access tag=100")
-        s1.ovscmd("/usr/bin/ovs-vsctl set interface 1 user_config:admin=up")
-        s1.ovscmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=access tag=100")
-        s1.ovscmd("/usr/bin/ovs-vsctl set interface 2 user_config:admin=up")
-
-        info("### Testing if ping fails when the VLAN",
-             "is not present in the global VLAN table ###\n")
-        out = h1.cmd("ping -c1 %s" % h2.IP())
-        info(out)
-
-        status = parsePing(out)
-        assert not status, "Ping Success even though global VLAN was missing"
-        info("### Ping Failed ###\n")
-
-        info("### Adding Global VLAN ###\n")
-        info("### Adding VLAN100. Ports 1,2 get reconfigured",
-             "with tag=100 ###\n")
-        s1.ovscmd("/usr/bin/ovs-vsctl add-vlan br0 100 admin=up")
-        time.sleep(1)
-        out = h1.cmd("ping -c1 %s" % h2.IP())
-        info(out)
-
-        status = parsePing(out)
-        assert status, \
-               "Ping Failed even though global VLAN was configured properly"
-        info("### Ping Success ###\n")
-
-        #Cleanup before next test
-        s1.ovscmd("/usr/bin/ovs-vsctl del-vlan br0 100")
-        s1.ovscmd("/usr/bin/ovs-vsctl del-port br0 1")
-        s1.ovscmd("/usr/bin/ovs-vsctl del-port br0 2")
-        s1.ovscmd("/usr/bin/ovs-vsctl del-br br0")
-
     def invalid_tags(self):
         '''
             4.1 Add VLAN 100 to global VLAN table
@@ -210,6 +163,7 @@ class vlanAccessTest( OpsVsiTest ):
              "with different tags ##########\n")
         s1.ovscmd("/usr/bin/ovs-vsctl add-br br0")
         s1.ovscmd("/usr/bin/ovs-vsctl add-vlan br0 100 admin=up")
+        s1.ovscmd("/usr/bin/ovs-vsctl add-vlan br0 200 admin=up")
         s1.ovscmd("/usr/bin/ovs-vsctl add-port br0 1 vlan_mode=access tag=100")
         s1.ovscmd("/usr/bin/ovs-vsctl set interface 1 user_config:admin=up")
         s1.ovscmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=access tag=200")
@@ -221,6 +175,9 @@ class vlanAccessTest( OpsVsiTest ):
         info(out)
 
         status = parsePing(out)
+        if status:
+            CLI(self.net)
+
         assert not status, \
                "Ping Success even though different tags on VLAN access ports"
         info("### Ping Failed ###\n")
@@ -258,10 +215,6 @@ class Test_switchd_container_vlan_access:
         self.test.vlan_normal()
 
     # TC_3
-    def test_switchd_container_vlan_missing(self):
-        self.test.vlan_missing()
-
-    # TC_4
     def test_switchd_container_invalid_tags(self):
         self.test.invalid_tags()
 
