@@ -20,10 +20,8 @@
 
 #include "ofproto/ofproto-provider.h"
 
-/* No bfd/cfm status change. */
-#define NO_STATUS_CHANGE -1
-#define MAX_CLI 1024
-#define OVS_VSCTL "/opt/openvswitch/bin/ovs-vsctl"
+#define MAX_CLI                 1024
+#define OVS_VSCTL               "/opt/openvswitch/bin/ovs-vsctl"
 
 struct sim_provider_rule {
     struct rule up;
@@ -41,12 +39,13 @@ struct sim_provider_group {
 struct ofbundle {
     struct hmap_node hmap_node; /* In struct ofproto's "bundles" hmap. */
     struct sim_provider_node *ofproto; /* Owning ofproto. */
+
     void *aux;                  /* Key supplied by ofproto's client. */
     char *name;                 /* Identifier for log messages. */
-    struct ofproto_bundle_settings s_copy; /* copy of bundle settings */
 
     /* Configuration. */
     struct ovs_list ports;      /* Contains "struct ofport"s. */
+
     enum port_vlan_mode vlan_mode; /* VLAN mode */
     int vlan;                   /* -1=trunk port, else a 12-bit VLAN ID. */
     unsigned long *trunks;      /* Bitmap of trunked VLANs, if 'vlan' == -1.
@@ -56,10 +55,15 @@ struct ofbundle {
     bool use_priority_tags;     /* Use 802.1p tag for frames in VLAN 0? */
 
     /* Status. */
-    bool floodable;          /* True if no port has OFPUTIL_PC_NO_FLOOD set. */
+    bool floodable;             /* True if no port has OFPUTIL_PC_NO_FLOOD set. */
+
+    bool is_added_to_sim_ovs;   /* If this bundle is added to ASCI simulating OVS. */
+
+    bool is_vlan_routing_enabled;  /* If VLAN routing is enabled on this bundle. */
+    bool is_bridge_bundle;         /* If the bundle is internal for the bridge. */
 };
 
-struct sim_provider_ofport_node {
+struct sim_provider_ofport {
     struct hmap_node odp_port_node;
     struct ofport up;
 
@@ -92,6 +96,8 @@ struct sim_provider_ofport_node {
      * This is deprecated.  It is only for compatibility with broken device */
     ofp_port_t realdev_ofp_port;
     int vlandev_vid;
+
+    bool iptable_rules_added;   /* If IP table rules added to drop L2 traffic. */
 };
 
 struct sim_provider_node {
@@ -147,6 +153,9 @@ struct sim_provider_node {
     uint64_t pins_seqno;
     unsigned long *vlans_bmp;      /* 4096-bit bitmap of in-use VLANs. */
     unsigned long *vlan_intf_bmp;  /* 4096 bitmap of vlan interfaces */
+
+    bool vrf;                      /* Specifies whether specific ofproto instance
+                                    * is backing up VRF and not bridge */
 };
 
 struct sim_provider_port_dump_state {
@@ -164,9 +173,8 @@ enum { TBL_INTERNAL = N_TABLES - 1 };    /* Used for internal hidden rules. */
 static void rule_get_stats(struct rule *, uint64_t *packets,
                            uint64_t *bytes, long long int *used);
 static void bundle_remove(struct ofport *);
-static struct sim_provider_ofport_node *get_ofp_port(
-                          const struct sim_provider_node *ofproto,
-                          ofp_port_t ofp_port);
+static struct sim_provider_ofport *get_ofp_port(const struct sim_provider_node *ofproto,
+                                                ofp_port_t ofp_port);
 
 extern const struct ofproto_class ofproto_sim_provider_class;
 #endif /* ofproto/ofproto-sim-provider.h */
