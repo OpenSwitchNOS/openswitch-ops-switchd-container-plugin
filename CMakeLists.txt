@@ -19,7 +19,7 @@ set (SRC_DIR src)
 set (INCL_DIR include)
 
 # Define compile flags
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99 -Werror")
 
 ###
 ### Define sources
