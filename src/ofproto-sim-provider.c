@@ -1249,5 +1249,6 @@ const struct ofproto_class ofproto_sim_provider_class = {
     NULL,                       /* l3_route_action */
     NULL,                       /* l3_ecmp_set */
     NULL,                       /* l3_ecmp_hash_set */
+    NULL,                       /* l3_host_action */
 #endif
 };
