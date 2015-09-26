@@ -33,10 +33,6 @@ VLOG_DEFINE_THIS_MODULE(sim_plugin);
 
 void
 init(void){
-    /* reset the "ASIC" */
-    system("rm /run/openvswitch-sim/ovsdb.db && \
-            kill -9 `cat /run/openvswitch-sim/ovsdb-server.pid` && \
-            ip netns exec swns iptables -F && sleep 3");
 }
 
 void
