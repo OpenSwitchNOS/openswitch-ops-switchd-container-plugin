@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright 2015 Hewlett Packard Enterprise Development LP
 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,67 +14,48 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * Hewlett-Packard Company Confidential (C) Copyright 2015 Hewlett-Packard Development Company, L.P.
  */
 
-#include <config.h>
-#include "ofproto/ofproto-provider.h"
 #include <errno.h>
-#include "bfd.h"
+
+#include "config.h"
+#include "ofproto/ofproto-provider.h"
 #include "ofproto/bond.h"
-#include "bundle.h"
-#include "byte-order.h"
-#include "coverage.h"
-#include "dynamic-string.h"
-#include "ofproto/fail-open.h"
 #include "ofproto/tunnel.h"
-#include "guarded-list.h"
-#include "hmapx.h"
-#include "lacp.h"
+#include "bundle.h"
+#include "coverage.h"
 #include "netdev.h"
-#include "poll-loop.h"
-#include "seq.h"
-#include "simap.h"
 #include "smap.h"
 #include "timer.h"
+#include "seq.h"
 #include "unaligned.h"
 #include "vlan-bitmap.h"
 #include "openvswitch/vlog.h"
 #include "ofproto-sim-provider.h"
-#include <vswitch-idl.h>
+#include "vswitch-idl.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
-COVERAGE_DEFINE(ofproto_sim_provider_expired);
-COVERAGE_DEFINE(rev_reconfigure_sim);
-COVERAGE_DEFINE(rev_bond_sim);
-COVERAGE_DEFINE(rev_port_toggled_sim);
+#define MAX_CMD_LEN             2048
+#define SWNS_EXEC               "/sbin/ip netns exec swns"
 
-#define MAX_CMD_LEN 128
-#define SWNS_EXEC "/sbin/ip netns exec swns"
-
-static int
-bundle_set_reconfigure(struct ofproto *ofproto_, int vid);
-
-static void bundle_remove(struct ofport *);
-
-static struct sim_provider_ofport_node *
-sim_provider_ofport_node_cast(const struct ofport *ofport)
+static struct sim_provider_ofport *
+sim_provider_ofport_cast(const struct ofport *ofport)
 {
     return ofport ?
-           CONTAINER_OF(ofport, struct sim_provider_ofport_node, up) : NULL;
+           CONTAINER_OF(ofport, struct sim_provider_ofport, up) : NULL;
 }
 
 static inline struct sim_provider_node *
 sim_provider_node_cast(const struct ofproto *ofproto)
 {
     ovs_assert(ofproto->ofproto_class == &ofproto_sim_provider_class);
+
     return CONTAINER_OF(ofproto, struct sim_provider_node, up);
 }
 
 /* All existing ofproto provider instances, indexed by ->up.name. */
-static struct hmap all_sim_provider_nodes =
-              HMAP_INITIALIZER(&all_sim_provider_nodes);
+static struct hmap all_sim_provider_nodes = HMAP_INITIALIZER(&all_sim_provider_nodes);
 
 /* Factory functions. */
 
@@ -131,7 +113,7 @@ port_open_type(const char *datapath_type OVS_UNUSED, const char *port_type)
 static struct ofproto *
 alloc(void)
 {
-    struct sim_provider_node *ofproto = xmalloc(sizeof *ofproto);
+    struct sim_provider_node *ofproto = xzalloc(sizeof *ofproto);
     return &ofproto->up;
 }
 
@@ -146,35 +128,52 @@ static int
 construct(struct ofproto *ofproto_)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
-    struct shash_node *node, *next;
-    int error=0;
-    char ovs_addbr[80];
+    struct shash_node        *node, *next;
+    int                      error = 0;
+    char                     cmd_str[MAX_CMD_LEN];
 
-    if (strcmp(ofproto_->type, "vrf")) {
-        sprintf(ovs_addbr, "%s add-br %s", OVS_VSCTL, ofproto->up.name);
-        if (system(ovs_addbr) != 0) {
-            VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
+    /* If the ofproto is of type BRIDGE, then create a bridge
+     * with the same name in ASIC OVS.
+     * In ASIC OVS creating a bridge also creates a bundle & port
+     * with the same name. The port will be 'internal' type. */
+    if (strcmp(ofproto_->type, "system") == 0) {
+
+        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s",
+                 OVS_VSCTL, ofproto->up.name);
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to add bridge in ASIC OVS. cmd=%s, rc=%s",
+                     cmd_str, strerror(errno));
             error = 1;
         }
 
-        sprintf(ovs_addbr, "%s set br %s datapath_type=netdev", OVS_VSCTL, ofproto->up.name);
-        if (system(ovs_addbr) != 0) {
-            VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
+        snprintf(cmd_str, MAX_CMD_LEN, "%s set br %s datapath_type=netdev",
+                 OVS_VSCTL, ofproto->up.name);
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to set bridge datapath_type. cmd=%s, rc=%s",
+                     cmd_str, strerror(errno));
             error = 1;
         }
 
-        sprintf(ovs_addbr, "%s set port %s trunks=0", OVS_VSCTL, ofproto->up.name);
-        if (system(ovs_addbr) != 0) {
-            VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
+        snprintf(cmd_str, MAX_CMD_LEN, "%s set port %s trunks=0",
+                 OVS_VSCTL, ofproto->up.name);
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to set trunks in the bridge bundle. cmd=%s, rc=%s",
+                     cmd_str, strerror(errno));
             error = 1;
         }
 
-        sprintf(ovs_addbr, "%s /sbin/ip link set dev %s up", SWNS_EXEC, ofproto->up.name);
-        if (system(ovs_addbr) != 0) {
-            VLOG_ERR("system command failure: %s, %s", ovs_addbr, strerror(errno));
+        snprintf(cmd_str, MAX_CMD_LEN, "%s /sbin/ip link set dev %s up",
+                 SWNS_EXEC, ofproto->up.name);
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to set link state. cmd=%s, rc=%s", cmd_str, strerror(errno));
             error = 1;
         }
+        ofproto->vrf = false;
+
+    } else {
+        ofproto->vrf = true;
     }
+
     ofproto->netflow = NULL;
     ofproto->stp = NULL;
     ofproto->rstp = NULL;
@@ -199,6 +198,7 @@ construct(struct ofproto *ofproto_)
 
     hmap_insert(&all_sim_provider_nodes, &ofproto->all_sim_provider_node,
                 hash_string(ofproto->up.name, 0));
+
     memset(&ofproto->stats, 0, sizeof ofproto->stats);
     ofproto->vlans_bmp = bitmap_allocate(VLAN_BITMAP_SIZE);
     ofproto->vlan_intf_bmp = bitmap_allocate(VLAN_BITMAP_SIZE);
@@ -212,12 +212,14 @@ static void
 destruct(struct ofproto *ofproto_ OVS_UNUSED)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
-    char ovs_delbr[80];
+    char                     ovs_delbr[80];
 
-    if (strcmp(ofproto_->type, "vrf")) {
+    if (ofproto->vrf == false) {
+
         sprintf(ovs_delbr, "%s del-br %s", OVS_VSCTL, ofproto->up.name);
         if (system(ovs_delbr) != 0) {
-            VLOG_ERR("system command failure: %s, %s", ovs_delbr, strerror(errno));
+            VLOG_ERR("Failed to delete the bridge. cmd=%s, rc=%s",
+                     ovs_delbr, strerror(errno));
         }
     }
 
@@ -258,24 +260,21 @@ query_tables(struct ofproto *ofproto,
 static struct ofport *
 port_alloc(void)
 {
-    struct sim_provider_ofport_node *port = xmalloc(sizeof *port);
+    struct sim_provider_ofport *port = xzalloc(sizeof *port);
     return &port->up;
 }
 
 static void
 port_dealloc(struct ofport *port_)
 {
-    struct sim_provider_ofport_node *port =
-           sim_provider_ofport_node_cast(port_);
+    struct sim_provider_ofport *port = sim_provider_ofport_cast(port_);
     free(port);
 }
 
 static int
 port_construct(struct ofport *port_)
 {
-    struct sim_provider_ofport_node *port =
-           sim_provider_ofport_node_cast(port_);
-
+    struct sim_provider_ofport *port = sim_provider_ofport_cast(port_);
     return 0;
 }
 
@@ -311,7 +310,6 @@ bundle_lookup(const struct sim_provider_node *ofproto, void *aux)
     HMAP_FOR_EACH_IN_BUCKET (bundle, hmap_node, hash_pointer(aux, 0),
                              &ofproto->bundles) {
         if (bundle->aux == aux) {
-            VLOG_DBG("returning bundle found");
             return bundle;
         }
     }
@@ -319,53 +317,318 @@ bundle_lookup(const struct sim_provider_node *ofproto, void *aux)
 }
 
 static void
-enable_l3(const char *intf_name)
+enable_port_in_iptables(const char *port_name)
 {
     char cmd[MAX_CMD_LEN];
 
-    snprintf(cmd, MAX_CMD_LEN, "%s /sbin/ip link set dev %s up",
-            SWNS_EXEC, intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
-    }
-
     snprintf(cmd, MAX_CMD_LEN, "%s iptables -D INPUT -i %s -j DROP",
-            SWNS_EXEC, intf_name);
+             SWNS_EXEC, port_name);
     if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
+        VLOG_ERR("Failed to delete DROP rule. cmd=%s rc=%s", cmd, strerror(errno));
     }
 
     snprintf(cmd, MAX_CMD_LEN, "%s iptables -D FORWARD -i %s -j DROP",
-            SWNS_EXEC, intf_name);
+             SWNS_EXEC, port_name);
     if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
+        VLOG_ERR("Failed to delete DROP rule. cmd=%s rc=%s", cmd, strerror(errno));
     }
 }
 
 static void
-disable_l3(const char *intf_name)
+disable_port_in_iptables(const char *port_name)
 {
-    char cmd[MAX_CMD_LEN];
+    int     rc = 0;
+    char    cmd[MAX_CMD_LEN];
 
+     /* Do not add drop rules if the "Check" command returns success. */
     snprintf(cmd, MAX_CMD_LEN, "%s iptables -C INPUT -i %s -j DROP",
-            SWNS_EXEC, intf_name);
-    /*
-     * Do not add drop rules if the "Check" command returned silently.
-     * Silent return means that the check command passed and a rule exists
-     */
-    if (system(cmd) != 0) {
-        memset(cmd, 0, sizeof(cmd));
+             SWNS_EXEC, port_name);
+    rc = system(cmd);
+    if (rc != 0) {
+
         snprintf(cmd, MAX_CMD_LEN, "%s iptables -A INPUT -i %s -j DROP",
-            SWNS_EXEC, intf_name);
+                 SWNS_EXEC, port_name);
         if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
+            VLOG_ERR("Failed to add DROP rules: cmd=%s rc=%s", cmd, strerror(errno));
         }
 
-        memset(cmd, 0, sizeof(cmd));
         snprintf(cmd, MAX_CMD_LEN, "%s iptables -A FORWARD -i %s -j DROP",
-            SWNS_EXEC, intf_name);
+                 SWNS_EXEC, port_name);
         if (system(cmd) != 0) {
-            VLOG_ERR("system command failure: cmd=%s",cmd);
+            VLOG_ERR("Failed to add DROP rules: cmd=%s rc=%s", cmd, strerror(errno));
+        }
+    }
+}
+
+static void
+bundle_del_port(struct sim_provider_ofport *port)
+{
+    struct ofbundle *bundle = port->bundle;
+
+    list_remove(&port->bundle_node);
+    port->bundle = NULL;
+
+    /* Enable the port in IP tables.
+     * So that regular L3 traffic can flow across it. */
+    if (port->iptable_rules_added == true) {
+        enable_port_in_iptables(netdev_get_name(port->up.netdev));
+        port->iptable_rules_added = false;
+    }
+}
+
+static bool
+bundle_add_port(struct ofbundle *bundle, ofp_port_t ofp_port)
+{
+    struct sim_provider_ofport *port;
+
+    port = get_ofp_port(bundle->ofproto, ofp_port);
+    if (!port) {
+        return false;
+    }
+
+    if (port->bundle != bundle) {
+        if (port->bundle) {
+            bundle_remove(&port->up);
+        }
+
+        port->bundle = bundle;
+        list_push_back(&bundle->ports, &port->bundle_node);
+    }
+
+    return true;
+}
+
+static void
+sim_bridge_vlan_routing_update(struct sim_provider_node *ofproto, int vlan, bool add)
+{
+    int     i = 0, n = 0;
+    int     vlan_count = 0;
+    char    cmd_str[MAX_CMD_LEN];
+
+    if (add) {
+
+        /* If the vlan is already added to the list. */
+        if (bitmap_is_set(ofproto->vlan_intf_bmp, vlan)) {
+                return;
+        }
+
+        /* Save the VLAN routing interface IDs. */
+        bitmap_set1(ofproto->vlan_intf_bmp, vlan);
+
+    } else {
+
+        /* If the vlan is already unset in the list. */
+        if (!bitmap_is_set(ofproto->vlan_intf_bmp, vlan)) {
+                return;
+        }
+
+        /* Unset the VLAN routing interface IDs. */
+        bitmap_set0(ofproto->vlan_intf_bmp, vlan);
+    }
+
+    n = snprintf(cmd_str, MAX_CMD_LEN, "%s set port %s ", OVS_VSCTL, ofproto->up.name);
+
+    for (i = 0; i < 4095; i++) {
+
+        if (bitmap_is_set(ofproto->vlan_intf_bmp, i)) {
+
+            if (vlan_count == 0) {
+                n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " trunks=%d", i);
+            } else {
+                n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), ",%d", i);
+            }
+            ovs_assert(n <= MAX_CMD_LEN);
+
+            vlan_count += 1;
+        }
+    }
+
+    if (vlan_count == 0) {
+        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " trunks=0");
+    }
+
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to modify bridge interface trunks: cmd=%s, rc=%s",
+                 cmd_str, strerror(errno));
+    }
+}
+
+/* Freeing up bundle and its members on heap */
+static void
+bundle_destroy(struct ofbundle *bundle)
+{
+    struct sim_provider_node    *ofproto = NULL;
+    struct sim_provider_ofport  *port = NULL, *next_port = NULL;
+    const char                  *type = NULL;
+    char                        cmd_str[MAX_CMD_LEN];
+
+    if (!bundle) {
+        return;
+    }
+
+    ofproto = bundle->ofproto;
+
+    if (bundle->is_added_to_sim_ovs == true) {
+        snprintf(cmd_str, MAX_CMD_LEN, "%s del-port %s", OVS_VSCTL,bundle->name);
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to delete the existing port. cmd=%s, rc=%s", cmd_str, strerror(errno));
+        }
+        bundle->is_added_to_sim_ovs = false;
+    }
+
+    /* If the ofproto is of type System/Bridge, and VLAN routing is enabled on this bundle
+     * then delete that VLAN ID from BRIDGE interface created in ASIC OVS.
+     * We should ignore the bundle whose name is same as the BRIDGE name. */
+    if (bundle->is_vlan_routing_enabled == true) {
+       sim_bridge_vlan_routing_update(ofproto, bundle->vlan, false);
+       bundle->is_vlan_routing_enabled = false;
+    }
+
+    LIST_FOR_EACH_SAFE (port, next_port, bundle_node, &bundle->ports) {
+        bundle_del_port(port);
+    }
+
+    hmap_remove(&ofproto->bundles, &bundle->hmap_node);
+
+    if (bundle->name) {
+        free(bundle->name);
+    }
+    if (bundle->trunks) {
+        free(bundle->trunks);
+    }
+
+    free(bundle);
+}
+
+static void
+bundle_configure(struct ofbundle *bundle)
+{
+    struct sim_provider_node    *ofproto = bundle->ofproto;
+    struct sim_provider_ofport  *port = NULL, *next_port = NULL;
+    char                        cmd_str[MAX_CMD_LEN];
+    int                         i = 0, n = 0, n_ports = 0;
+    uint32_t                    vlan_count = 0;
+
+    /* If this bundle is already added in the ASIC simulator OVS then delete it.
+     * We are going to re-create it with new config again. */
+    if (bundle->is_added_to_sim_ovs == true) {
+        snprintf(cmd_str, MAX_CMD_LEN, "%s del-port %s", OVS_VSCTL, bundle->name);
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to delete the existing port. cmd=%s, rc=%s",
+                     cmd_str, strerror(errno));
+        }
+        bundle->is_added_to_sim_ovs = false;
+    }
+
+    /* If this bundle is attached to VRF,
+     * there is no need to do any special handling.
+     * Kernel will take care of routing. */
+    if (ofproto->vrf) {
+        return;
+    }
+
+    n_ports = list_size(&bundle->ports);
+
+    /* If there is only one slave, then it should be a regular port not a bundle. */
+    if (n_ports == 1) {
+        n = snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-port %s ", OVS_VSCTL, ofproto->up.name);
+    } else if (n_ports > 1) {
+        n = snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-bond %s %s",
+                     OVS_VSCTL, ofproto->up.name, bundle->name);
+    } else {
+        VLOG_INFO("Not enough ports to create a bundle, so skipping it.");
+    }
+
+    LIST_FOR_EACH_SAFE (port, next_port, bundle_node, &bundle->ports) {
+
+        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " %s", netdev_get_name(port->up.netdev));
+        ovs_assert(n <= MAX_CMD_LEN);
+    }
+
+    if (bundle->vlan_mode == PORT_VLAN_ACCESS) {
+
+        if ((bundle->vlan > 0) && (bitmap_is_set(ofproto->vlans_bmp, bundle->vlan))) {
+            n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " tag=%d", bundle->vlan);
+            ovs_assert(n <= MAX_CMD_LEN);
+        } else {
+            goto done;
+        }
+    } else {
+
+        if (bundle->trunks) {
+            for (i=0; i < 4095; i++) {
+                if ((bitmap_is_set(bundle->trunks, i)) &&
+                    (bitmap_is_set(ofproto->vlans_bmp, i))) {
+
+                    if (vlan_count == 0) {
+                        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " trunks=%d", i);
+                    } else {
+                        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), ",%d", i);
+                    }
+
+                    ovs_assert(n <= MAX_CMD_LEN);
+                    vlan_count += 1;
+                }
+            }
+            /* If the trunk vlans are not defined in the global list. */
+            if (vlan_count == 0) {
+                goto done;
+            }
+
+        } else {
+            for (i=0; i < 4095; i++) {
+                if (bitmap_is_set(ofproto->vlans_bmp, i)) {
+                    if (vlan_count == 0) {
+                        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " trunks=%d", i);
+                    } else {
+                        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), ",%d", i);
+                    }
+
+                    ovs_assert(n <= MAX_CMD_LEN);
+                    vlan_count += 1;
+                }
+            }
+            /* If the trunk vlans are not defined in the global list. */
+            if (vlan_count == 0) {
+                goto done;
+            }
+        }
+    }
+
+    if (bundle->vlan_mode == PORT_VLAN_ACCESS) {
+        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " vlan_mode=access");
+        ovs_assert(n <= MAX_CMD_LEN);
+
+    } else if (bundle->vlan_mode == PORT_VLAN_TRUNK) {
+        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " vlan_mode=trunk");
+        ovs_assert(n <= MAX_CMD_LEN);
+
+    } else if (bundle->vlan_mode == PORT_VLAN_NATIVE_UNTAGGED) {
+        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " vlan_mode=native-untagged");
+        ovs_assert(n <= MAX_CMD_LEN);
+
+    } else if (bundle->vlan_mode == PORT_VLAN_NATIVE_TAGGED) {
+        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " vlan_mode=native-tagged");
+        ovs_assert(n <= MAX_CMD_LEN);
+    }
+
+    VLOG_DBG(cmd_str);
+
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to create bundle. %s, %s", cmd_str, strerror(errno));
+    } else {
+        bundle->is_added_to_sim_ovs = true;
+    }
+
+done:
+    /* Install IP table rules to prevent the traffic going to kernel
+     * IP stack. When L2 switching is enabled on a port, ASIC OVS takes
+     * care of switch the packets. We only depend on kernel to do L3 routing. */
+    LIST_FOR_EACH_SAFE (port, next_port, bundle_node, &bundle->ports) {
+
+        if (port->iptable_rules_added == false) {
+            disable_port_in_iptables(netdev_get_name(port->up.netdev));
+            port->iptable_rules_added = true;
         }
     }
 }
@@ -375,368 +638,163 @@ static int
 bundle_set(struct ofproto *ofproto_, void *aux,
            const struct ofproto_bundle_settings *s)
 {
-    struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
-    const struct ofport *ofport;
-    int ofp_port, i, n;
-    const char *opt_arg;
-    char cmd_str[MAX_CLI];
-    struct ofbundle *bundle;
-    int vlan_count = 0;
-    struct ofproto_bundle_settings *s_copy;
-    struct sim_provider_ofport_node *port;
-    int vlan_id;
-    const char *type = NULL;
+    struct sim_provider_node    *ofproto = sim_provider_node_cast(ofproto_);
+    const struct ofport         *ofport = NULL;
+    bool                        ok = false;
+    int                         ofp_port, i =0, n = 0;
+    char                        cmd_str[MAX_CMD_LEN];
+    struct ofbundle             *bundle;
+    unsigned long               *trunks = NULL;
 
     if (s == NULL) {
-        return ENODEV;
+        bundle_destroy(bundle_lookup(ofproto, aux));
+        return 0;
     }
     bundle = bundle_lookup(ofproto, aux);
 
-    /* Cloning the necessary data members in s into s_copy for HMAP lookup
-     * during reconfiguration of ports */
     if (!bundle) {
         bundle = xmalloc(sizeof(struct ofbundle));
-        hmap_insert(&ofproto->bundles, &bundle->hmap_node,
-                    hash_pointer(aux, 0));
+
+        bundle->ofproto = ofproto;
+        hmap_insert(&ofproto->bundles, &bundle->hmap_node, hash_pointer(aux, 0));
         bundle->aux = aux;
         bundle->name = NULL;
-        s_copy = &bundle->s_copy;
-        memcpy(s_copy, s, sizeof(struct ofproto_bundle_settings));
-        s_copy->name = xstrdup(s->name);
-        s_copy->slaves= xmalloc(sizeof(ofp_port_t) * s->n_slaves);
-        for (i=0; i < s->n_slaves; i++) {
-            s_copy->slaves[i] = s->slaves[i];
-        }
-        if (s->trunks) {
-            s_copy->trunks = bitmap_clone(s->trunks, VLAN_BITMAP_SIZE);
-        } else {
-            s_copy->trunks = NULL;
-        }
-        if (s->bond != NULL) {
-            s_copy->bond->name = xstrdup(s->bond->name);
-        }
-    }
 
-    int vlan = (s->vlan_mode == PORT_VLAN_TRUNK ? -1
-            : s->vlan >= 0 && s->vlan <= 4095 ? s->vlan
-            : 0);
+        list_init(&bundle->ports);
+        bundle->vlan_mode = PORT_VLAN_ACCESS;
+        bundle->vlan = -1;
+        bundle->trunks = NULL;
+        bundle->bond = NULL;
+        bundle->is_added_to_sim_ovs = false;
+        bundle->is_vlan_routing_enabled = false;
+        bundle->is_bridge_bundle = false;
+    }
 
     if (!bundle->name || strcmp(s->name, bundle->name)) {
         free(bundle->name);
         bundle->name = xstrdup(s->name);
     }
 
-    VLOG_DBG("bridge/vrf name %s port name %s", ofproto->up.name, bundle->name);
-    port = sim_provider_ofport_node_cast(ofproto_get_port(ofproto_, s->slaves[0]));
-    if(port) {
-       type = netdev_get_type(port->up.netdev);
+    /* Update set of ports. */
+    ok = true;
+    for (i = 0; i < s->n_slaves; i++) {
+        if (!bundle_add_port(bundle, s->slaves[i])) {
+            ok = false;
+        }
     }
 
-    vlan_id = s->vlan;
+    if (!ok || list_size(&bundle->ports) != s->n_slaves) {
+        struct sim_provider_ofport *next_port = NULL, *port = NULL;
 
-    /* Configure trunk for bridge interface so we receive vlan frames
-     * on  internal vlan interfaces created on top of bridge.
-     * Skip this for internal interface is bridge internal
-     * interface with same name as bridge */
-    if(type && (strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) && vlan_id &&
-       (s->n_slaves == 1) && (strcmp(bundle->name, ofproto->up.name) != 0)) {
-
-        if(strcmp(ofproto->up.type, "vrf")) {
-            VLOG_INFO("bridge %s %s vland id %d", ofproto->up.name, type, vlan_id);
-            bitmap_set1(ofproto->vlan_intf_bmp, vlan_id);
-            n = snprintf(cmd_str, MAX_CLI - n, "%s set port %s ", OVS_VSCTL, ofproto->up.name);
-            for (i=0; i < 4095; i++) {
-                if (bitmap_is_set(ofproto->vlan_intf_bmp, i)) {
-                    if (vlan_count == 0) {
-                        n += snprintf(&cmd_str[n], MAX_CLI - n, " trunks=%d", i);
-                    } else {
-                        n += snprintf(&cmd_str[n], MAX_CLI - n, ",%d", i);
-                    }
-
-                    if (n > MAX_CLI - 1) {
-                        VLOG_ERR("Command line string exceeds the buffer size");
-
-                        return 0;
-                    }
-                    vlan_count += 1;
+        LIST_FOR_EACH_SAFE (port, next_port, bundle_node, &bundle->ports) {
+            for (i = 0; i < s->n_slaves; i++) {
+                if (s->slaves[i] == port->up.ofp_port) {
+                    goto found;
                 }
             }
+            bundle_del_port(port);
+        found: ;
+        }
+    }
+    ovs_assert(list_size(&bundle->ports) <= s->n_slaves);
 
-            if (system(cmd_str) != 0) {
-                VLOG_ERR("system command failure: %s, %s", cmd_str, strerror(errno));
-            }
+    if (list_is_empty(&bundle->ports)) {
+        bundle_destroy(bundle);
+        return EINVAL;
+    }
 
+    VLOG_DBG("Bridge/VRF name=%s type=%s bundle=%s",
+             ofproto->up.name, ofproto->up.type, bundle->name);
+
+
+    /* If it is bridge's internal bundle return from here. */
+    if (bundle->is_bridge_bundle == true) {
+        return 0;
+    }
+
+    /* Check if the given bundle is a VLAN routing enabled. */
+    if (s->n_slaves == 1) {
+
+        struct sim_provider_ofport  *port = NULL;
+        const char *type = NULL;
+
+        port = sim_provider_ofport_cast(ofproto_get_port(ofproto_, s->slaves[0]));
+        if(port) {
+           type = netdev_get_type(port->up.netdev);
+        }
+
+        /* Configure trunk for bridge interface so we receive vlan frames
+         * on  internal vlan interfaces created on top of bridge.
+         * Skip this for internal interface is bridge internal
+         * interface with same name as bridge */
+        if((type != NULL) && (strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) &&
+           (s->vlan) && (strcmp(bundle->name, ofproto->up.name) != 0) &&
+           (ofproto->vrf == false)) {
+
+            sim_bridge_vlan_routing_update(ofproto, s->vlan, true);
             bundle->vlan = s->vlan;
+
+            bundle->is_vlan_routing_enabled = true;
+
+            return 0;
         }
-        goto done;
+
+        /* If the bundle name is same as ofproto name, then it is internal
+         * bundle for that bridge. We don't need to handle such bundles. */
+        if ((type != NULL) && (strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) &&
+            (strcmp(bundle->name, ofproto->up.name) == 0) &&
+            (ofproto->vrf == false)) {
+
+            bundle->is_bridge_bundle = true;
+
+            return 0;
+        }
     }
 
-    if (vlan != -1  && !bitmap_is_set(ofproto->vlans_bmp, vlan)) {
+    /* If this bundle is attached to VRF,
+     * and it is a VLAN based internal bundle,
+     * then there is no need to do any special handling.
+     * Kernel will take care of routing. */
+    if (ofproto->vrf == true) {
         return 0;
     }
 
-    VLOG_DBG("bundle_set vlan= %d vlan_mode= %s VLAN port %s",
-               vlan,
-               s->vlan_mode == PORT_VLAN_ACCESS ? "ACCESS" :
-               s->vlan_mode == PORT_VLAN_TRUNK  ? "TRUNK":
-               s->vlan_mode == PORT_VLAN_NATIVE_UNTAGGED ? "NATIVE UNTAGGED" :
-               s->vlan_mode == PORT_VLAN_NATIVE_TAGGED ? "NATIVE TAGGED" : "UNKNOWN",
-               s->name);
+    /* If it is a bond, and there are less than two ports added to it,
+     * then postpone creating this bond in ASIC OVS until at least
+     * two ports are added to it. */
+    if ((s->slaves_entered > 1) && s->n_slaves <= 1) {
+        VLOG_INFO("LAG Doesn't have enough interfaces to enable. So delaying the creation.");
+        return 0;
+    }
 
-    if (s->n_slaves == 1 && (s->n_slaves == s->slaves_entered)) {
-        n = snprintf(cmd_str, MAX_CLI - n, "%s add-port %s", OVS_VSCTL, ofproto->up.name);
-        VLOG_DBG("%s add-port %s", OVS_VSCTL, ofproto->up.name);
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
-    } else if (s->n_slaves == s->slaves_entered) {
-        n = snprintf(cmd_str, MAX_CLI - n, "%s del-port %s", OVS_VSCTL, s->name);
-        system(cmd_str);
-        n = snprintf(cmd_str, MAX_CLI - n, "%s add-bond %s %s", OVS_VSCTL, ofproto->up.name, s->name);
-        VLOG_DBG("%s add-bond %s %s", OVS_VSCTL, ofproto->up.name, s->name);
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
+    /* Copy the data from 's' into bundle structure. */
+
+    bundle->vlan_mode = s->vlan_mode;
+
+    if ((s->vlan > 0) && (s->vlan <= 4095)) {
+        bundle->vlan = s->vlan;
     } else {
-        return 0;
-    }
-
-    for (i=0; i < s->n_slaves; i++) {
-
-        ofport = ofproto_get_port(ofproto_, s->slaves[i]);
-
-        ofp_port = ofport ? ofport->ofp_port : OFPP_NONE;
-        if (ofp_port == OFPP_NONE) {
-            VLOG_WARN("Null ofport for bundle member# %d", i);
-            continue;
-        }
-
-        if (s->n_slaves > 1) {
-               VLOG_DBG("bundle_set member# %d port %s internal port# %d",
-                            i, netdev_get_name(ofport->netdev) , ofp_port);
-        } else {
-                VLOG_DBG("port %s internal port# %d",
-                            netdev_get_name(ofport->netdev) , ofp_port);
-        }
-        n += snprintf(&cmd_str[n], MAX_CLI - n, " %s", netdev_get_name(ofport->netdev));
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
-
-        if (strcmp(ofproto->up.type, "vrf")) {
-            disable_l3(netdev_get_name(ofport->netdev));
-        }
+        bundle->vlan = 0;
     }
 
     if (s->trunks) {
-        uint32_t i;
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
-        VLOG_DBG("trunk vlan list");
-        for (i=0; i < 4095; i++) {
-            if ((bitmap_is_set(s->trunks, i)) && (bitmap_is_set(ofproto->vlans_bmp, i))) {
-                if (vlan_count == 0) {
-                    n += snprintf(&cmd_str[n], MAX_CLI - n, " trunks=%d", i);
-                } else {
-                    n += snprintf(&cmd_str[n], MAX_CLI - n, ",%d", i);
-                }
+        trunks = CONST_CAST(unsigned long *, s->trunks);
 
-                if (n > MAX_CLI - 1) {
-                    VLOG_ERR("Command line string exceeds the buffer size");
-
-                    return 0;
-                }
-                vlan_count += 1;
-            }
+        if (!vlan_bitmap_equal(trunks, bundle->trunks)) {
+            free(bundle->trunks);
+            bundle->trunks = vlan_bitmap_clone(trunks);
         }
-        if (!vlan_count) {
-            VLOG_DBG("No VLANs present ");
-            return 0;
+    } else {
+        if (bundle->trunks) {
+            free(bundle->trunks);
+            bundle->trunks = NULL;
         }
     }
 
-    if (vlan > 0) {
-        n += snprintf(&cmd_str[n], MAX_CLI - n, " tag=%d", vlan);
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
-    }
+    /* Configure the bundle */
+    bundle_configure(bundle);
 
-    if (s->vlan_mode == PORT_VLAN_ACCESS) {
-        n += snprintf(&cmd_str[n], MAX_CLI - n, " vlan_mode=access");
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
-    } else
-    if (s->vlan_mode == PORT_VLAN_TRUNK) {
-        n += snprintf(&cmd_str[n], MAX_CLI - n, " vlan_mode=trunk");
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
-    } else
-    if (s->vlan_mode == PORT_VLAN_NATIVE_UNTAGGED) {
-        n += snprintf(&cmd_str[n], MAX_CLI - n, " vlan_mode=native-untagged");
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
-    } else
-    if (s->vlan_mode == PORT_VLAN_NATIVE_TAGGED) {
-        n += snprintf(&cmd_str[n], MAX_CLI - n, " vlan_mode=native-tagged");
-        if (n > MAX_CLI - 1) {
-            VLOG_ERR("Command line string exceeds the buffer size");
-            return 0;
-        }
-    }
-
-
-    if (strcmp(ofproto_->type, "vrf")) {
-        VLOG_DBG(cmd_str);
-        if (system(cmd_str) != 0) {
-            VLOG_ERR("system command failure: %s, %s", cmd_str, strerror(errno));
-        }
-    }
-
-done:
     return 0;
-}
-
-/* Freeing up bundle and its members on heap */
-static void
-bundle_destroy(struct ofbundle *bundle, struct ofproto *ofproto_)
-{
-    struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
-    char cmd_str[MAX_CLI];
-    int n;
-
-    if (!bundle) {
-        return;
-    }
-
-    if (!ofproto) {
-        return;
-    }
-    /* Remove vlan from bridge trunks for internal vlan interfaces*/
-    if(strcmp(ofproto->up.type, "vrf") && bundle->s_copy.n_slaves == 1 &&
-            strcmp(bundle->name, ofproto->up.name)) {
-        struct sim_provider_ofport_node *port;
-        int i, vlan_id, vlan_count = 0;
-        const char *type = NULL;
-        port = sim_provider_ofport_node_cast(ofproto_get_port(ofproto_, bundle->s_copy.slaves[0]));
-        if(port) {
-            type = netdev_get_type(port->up.netdev);
-        }
-        vlan_id = bundle->vlan;
-        VLOG_DBG("bundle_destroy: bridge %s %s vland id %d", ofproto->up.name, type, vlan_id);
-        if(type && (strcmp(type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0) && vlan_id) {
-            bitmap_set0(ofproto->vlan_intf_bmp, bundle->vlan);
-            n = snprintf(cmd_str, MAX_CLI - n, "%s set port %s ", OVS_VSCTL, ofproto->up.name);
-            for (i=0; i < 4095; i++) {
-                if (bitmap_is_set(ofproto->vlan_intf_bmp, i)) {
-                    if (vlan_count == 0) {
-                        n += snprintf(&cmd_str[n], MAX_CLI - n, " trunks=%d", i);
-                    } else {
-                        n += snprintf(&cmd_str[n], MAX_CLI - n, ",%d", i);
-                    }
-
-                    if (n > MAX_CLI - 1) {
-                        VLOG_ERR("Command line string exceeds the buffer size");
-                        break;
-                    }
-                    vlan_count += 1;
-                }
-            }
-
-            if (vlan_count == 0)
-                n += snprintf(&cmd_str[n], MAX_CLI - n, " trunks=0");
-
-            if (system(cmd_str) != 0) {
-                VLOG_ERR("system command failure: %s, %s", cmd_str, strerror(errno));
-            }
-        }
-    }
-
-    hmap_remove(&ofproto->bundles, &bundle->hmap_node);
-
-    if (bundle->s_copy.name) {
-        free(bundle->s_copy.name);
-    }
-
-    if (bundle->s_copy.slaves) {
-        free(bundle->s_copy.slaves);
-    }
-
-    if (bundle->s_copy.trunks) {
-        bitmap_free(bundle->s_copy.trunks);
-    }
-
-    if (bundle->s_copy.bond != NULL ) {
-        if (bundle->s_copy.bond->name) {
-            free(bundle->s_copy.bond->name);
-        }
-    }
-
-    done:
-    free(bundle);
-}
-
-static void
-bundle_delete(struct ofport *ofport)
-{
-    char cmd_str[80];
-    struct sim_provider_node *ofproto = sim_provider_node_cast(ofport->ofproto);
-    struct ofbundle *bundle, *bundle_hmap;
-
-    HMAP_FOR_EACH (bundle, hmap_node, &ofproto->bundles) {
-        if (!strcmp(bundle->s_copy.name, netdev_get_name(ofport->netdev))) {
-            if (strcmp(ofport->ofproto->type, "vrf")) {
-                sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                VLOG_DBG("%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                system(cmd_str);
-                enable_l3(bundle->s_copy.name);
-            }
-            bundle_destroy(bundle, ofport->ofproto);
-            return;
-        } else if (bundle->s_copy.bond != NULL) {
-            if (!strcmp(bundle->s_copy.bond->name, bundle->s_copy.name)) {
-                volatile struct ofport *ofport_loop;
-                int i, j;
-                if (strcmp(ofport->ofproto->type, "vrf")) {
-                    sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                    VLOG_DBG("%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                    system(cmd_str);
-                    enable_l3(bundle->s_copy.name);
-                    for (i = 0; i < bundle->s_copy.slaves_entered; i++) {
-                        ofport_loop = ofproto_get_port(ofport->ofproto, bundle->s_copy.slaves[i]);
-                        enable_l3(netdev_get_name(ofport_loop->netdev));
-                    }
-                }
-                bundle_destroy(bundle, ofport->ofproto);
-                return;
-            }
-        }
-    }
-}
-
-static void
-bundle_remove(struct ofport *port)
-{
-    if (port) {
-        if (port->netdev) {
-            VLOG_DBG("%s delete port %s", __FUNCTION__,
-                      netdev_get_name(port->netdev));
-        }
-        bundle_delete(port);
-    }
-    return;
 }
 
 static int
@@ -745,57 +803,84 @@ bundle_get(struct ofproto *ofproto_, void *aux, int *bundle_handle)
     return 0;
 }
 
-
-static int
-set_vlan(struct ofproto *ofproto, int vid, bool add)
-{
-    struct sim_provider_node *sim_ofproto = sim_provider_node_cast(ofproto);
-
-    VLOG_DBG("%s: entry, vid=%d, oper=%s", __FUNCTION__,
-              vid, (add ? "add":"del"));
-    if (add) {
-        VLOG_DBG("VLAN add %d ", vid);
-        bitmap_set1(sim_ofproto->vlans_bmp, vid);
-
-    } else {
-        VLOG_DBG("VLAN del %d ", vid);
-        bitmap_set0(sim_ofproto->vlans_bmp, vid);
-    }
-    bundle_set_reconfigure(ofproto, vid);
-
-    return 0;
-}
-
-
 static int
 bundle_set_reconfigure(struct ofproto *ofproto_, int vid)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
-    char cmd_str[80];
     struct ofbundle *bundle;
 
     HMAP_FOR_EACH (bundle, hmap_node, &ofproto->bundles) {
-        if ((bundle->s_copy.vlan == vid) || (bundle->s_copy.trunks &&
-                                            bitmap_is_set(bundle->s_copy.trunks, vid))) {
-            if (strcmp(ofproto_->type, "vrf")) {
-                sprintf(cmd_str, "%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                VLOG_DBG("%s del-port %s", OVS_VSCTL, bundle->s_copy.name);
-                system(cmd_str);
-                enable_l3(bundle->s_copy.name);
-            }
-            bundle_set(ofproto_, bundle->aux, &bundle->s_copy);
-        } else {
-            VLOG_DBG("VLAN Id %d doesn't match port= %s",
-            vid, bundle->s_copy.name);
+
+        /* bundles with VLAN routing enabled doesn't need
+         * re-configuration when L2 VLan config is changed. */
+        if ((bundle->is_vlan_routing_enabled == true) ||
+            (bundle->is_bridge_bundle == true)) {
+
+            continue;
         }
+
+        /* Reconfiguring bundle with original configuration when VLAN is added
+         * and deleting the bundle when corresponding VLAN gets deleted*/
+        bundle_configure(bundle);
+    }
+    return 0;
+}
+
+static void
+bundle_remove(struct ofport *port_)
+{
+    struct sim_provider_ofport *port = sim_provider_ofport_cast(port_);
+    struct ofbundle *bundle = port->bundle;
+
+    if (bundle) {
+        bundle_del_port(port);
+
+        /* If there are no ports left, delete the bunble. */
+        if (list_is_empty(&bundle->ports)) {
+            bundle_destroy(bundle);
+        } else {
+            /* Re-configure the bundle with new config. */
+            bundle_configure(bundle);
+        }
+    }
+}
+
+static int
+set_vlan(struct ofproto *ofproto_, int vid, bool add)
+{
+    struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+
+    /* MAKE TO DBG */
+    VLOG_DBG("%s: vid=%d, oper=%s", __FUNCTION__,
+             vid, (add ? "add":"del"));
+
+    if (add) {
+
+        /* If the vlan is already added to the list. */
+        if (bitmap_is_set(ofproto->vlans_bmp, vid)) {
+                return 0;
+        }
+
+        bitmap_set1(ofproto->vlans_bmp, vid);
+
+    } else {
+
+        /* If the vlan is already unset in the list. */
+        if (!bitmap_is_set(ofproto->vlans_bmp, vid)) {
+                return 0;
+        }
+
+        bitmap_set0(ofproto->vlans_bmp, vid);
+    }
+
+    if (ofproto->vrf == false) {
+        bundle_set_reconfigure(ofproto_, vid);
     }
 
     return 0;
 }
 
-
 /* Mirrors. */
-
 static int
 mirror_get_stats__(struct ofproto *ofproto OVS_UNUSED, void *aux OVS_UNUSED,
                    uint64_t *packets OVS_UNUSED, uint64_t *bytes OVS_UNUSED)
@@ -817,11 +902,11 @@ forward_bpdu_changed(struct ofproto *ofproto_ OVS_UNUSED)
 
 /* Ports. */
 
-static struct sim_provider_ofport_node *
+static struct sim_provider_ofport *
 get_ofp_port(const struct sim_provider_node *ofproto, ofp_port_t ofp_port)
 {
     struct ofport *ofport = ofproto_get_port(&ofproto->up, ofp_port);
-    return ofport ? sim_provider_ofport_node_cast(ofport) : NULL;
+    return ofport ? sim_provider_ofport_cast(ofport) : NULL;
 }
 
 static int
@@ -863,7 +948,7 @@ static int
 port_del(struct ofproto *ofproto_, ofp_port_t ofp_port)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
-    struct sim_provider_ofport_node *ofport =
+    struct sim_provider_ofport *ofport =
            get_ofp_port(ofproto, ofp_port);
     int error = 0;
 
@@ -873,8 +958,7 @@ port_del(struct ofproto *ofproto_, ofp_port_t ofp_port)
 static int
 port_get_stats(const struct ofport *ofport_, struct netdev_stats *stats)
 {
-    struct sim_provider_ofport_node *ofport =
-           sim_provider_ofport_node_cast(ofport_);
+    struct sim_provider_ofport *ofport = sim_provider_ofport_cast(ofport_);
     int error;
 
     error = netdev_get_stats(ofport->up.netdev, stats);
@@ -1239,15 +1323,7 @@ const struct ofproto_class ofproto_sim_provider_class = {
     NULL,                       /* Add l3 host entry */
     NULL,                       /* Delete l3 host entry */
     NULL,                       /* Get l3 host entry hit bits */
-#if 0
-    set_config,                  /* set_config options */
-#endif
-#ifdef HALON
-    NULL,                       /* add_l3_host_entry */
-    NULL,                       /* delete_l3_host_entry */
-    NULL,                       /* get_l3_host_hit */
-    NULL,                       /* l3_route_action */
-    NULL,                       /* l3_ecmp_set */
-    NULL,                       /* l3_ecmp_hash_set */
-#endif
+    NULL,                       /* l3 route action - install, update, delete */
+    NULL,                       /* enable/disable ECMP globally */
+    NULL,                       /* enable/disable ECMP hash configs */
 };
