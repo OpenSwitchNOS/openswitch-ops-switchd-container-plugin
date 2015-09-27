@@ -28,7 +28,7 @@
 #include <netinet/in.h>
 #include <net/if.h>
 
-#include <openhalon-idl.h>
+#include <openswitch-idl.h>
 
 #include "openvswitch/vlog.h"
 #include "netdev-sim.h"
