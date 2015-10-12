@@ -563,6 +563,11 @@ bundle_configure(struct ofbundle *bundle)
         ovs_assert(n <= MAX_CMD_LEN);
     }
 
+    /* Always configure bond_mode as balance-slb to get active-active links. */
+    if (n_ports > 1) {
+            n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " bond_mode=balance-slb");
+    }
+
     if (bundle->vlan_mode == PORT_VLAN_ACCESS) {
 
         if ((bundle->vlan > 0)
