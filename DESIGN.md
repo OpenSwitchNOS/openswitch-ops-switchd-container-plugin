@@ -6,7 +6,7 @@
 - [Description](#description)
 - [Responsibilities](#responsibilities)
 - [Design choices](#design-choices)
-- [Relationship between OpenSwitch and OpenVswitch](#relationship-between-openswitch-and-openvswitch)
+- [Relationship between OpenSwitch and Open vSwitch](#relationship-between-openswitch-and-open-vswitch)
 - [Internal structure](#internal-structure)
 	- [netdev simulation provider](#netdev-simulation-provider)
 		- [netdev simulation key data structures](#netdev-simulation-key-data-structures)
@@ -165,13 +165,13 @@ The `ofproto` class functions are loaded dynamically via a plugin. It allows fle
 * `port_open_type`       - Report port type: system or internal.
 * `alloc`                - Allocate memory for ofproto.
 * `construct`            - Multiple functions:
- -- Create a bridge in target OVS ("ASIC") and set.
- -- Datapath to netdev to allow kernel forwarding.
- -- Create a port with same name.
- -- Bring up the bridge in data path name space (swns).
- -- Initialize `ofproto` data structures.
- -- Allocate an empty VLAN bitmap.
- -- Add `ofproto` to a global hash map.
+    - Create a bridge in target OVS ("ASIC") and set.
+    - Datapath to netdev to allow kernel forwarding.
+    - Create a port with same name.
+    - Bring up the bridge in data path name space (swns).
+    - Initialize `ofproto` data structures.
+    - Allocate an empty VLAN bitmap.
+    - Add `ofproto` to a global hash map.
 * `destruct`             - Remove bridge from target OVS and free up internal structures. Remove ofproto from global hash map.
 * `dealloc`              - Free up ofproto memory.
 * `port_alloc`           - Allocate port memory.
