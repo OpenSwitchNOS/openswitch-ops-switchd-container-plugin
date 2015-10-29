@@ -440,7 +440,7 @@ sim_bridge_vlan_routing_update(struct sim_provider_node *ofproto, int vlan,
     n = snprintf(cmd_str, MAX_CMD_LEN, "%s set port %s ", OVS_VSCTL,
                  ofproto->up.name);
 
-    for (i = 0; i < 4095; i++) {
+    for (i = 1; i < 4095; i++) {
 
         if (bitmap_is_set(ofproto->vlan_intf_bmp, i)) {
 
@@ -563,8 +563,12 @@ bundle_configure(struct ofbundle *bundle)
         ovs_assert(n <= MAX_CMD_LEN);
     }
 
-    if (bundle->vlan_mode == PORT_VLAN_ACCESS) {
+    /* Always configure bond_mode as balance-slb to get active-active links. */
+    if (n_ports > 1) {
+        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " bond_mode=balance-slb");
+    }
 
+    if (bundle->vlan_mode != PORT_VLAN_TRUNK) {
         if ((bundle->vlan > 0)
             && (bitmap_is_set(ofproto->vlans_bmp, bundle->vlan))) {
             n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " tag=%d",
@@ -573,50 +577,51 @@ bundle_configure(struct ofbundle *bundle)
         } else {
             goto done;
         }
-    } else {
+    }
 
-        if (bundle->trunks) {
-            for (i = 0; i < 4095; i++) {
-                if ((bitmap_is_set(bundle->trunks, i)) &&
-                    (bitmap_is_set(ofproto->vlans_bmp, i))) {
+    if (bundle->trunks && bundle->vlan_mode != PORT_VLAN_ACCESS) {
+        for (i = 1; i < 4095; i++) {
+            if ((bitmap_is_set(bundle->trunks, i)) &&
+                (bitmap_is_set(ofproto->vlans_bmp, i))) {
 
-                    if (vlan_count == 0) {
-                        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n),
-                                      " trunks=%d", i);
-                    } else {
-                        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), ",%d",
-                                      i);
-                    }
-
-                    ovs_assert(n <= MAX_CMD_LEN);
-                    vlan_count += 1;
+                if (vlan_count == 0) {
+                    n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n),
+                                  " trunks=%d", i);
+                } else {
+                    n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), ",%d",
+                                  i);
                 }
-            }
-            /* If the trunk vlans are not defined in the global list. */
-            if (vlan_count == 0) {
-                goto done;
-            }
 
-        } else {
-            for (i = 0; i < 4095; i++) {
-                if (bitmap_is_set(ofproto->vlans_bmp, i)) {
-                    if (vlan_count == 0) {
-                        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n),
-                                      " trunks=%d", i);
-                    } else {
-                        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), ",%d",
-                                      i);
-                    }
-
-                    ovs_assert(n <= MAX_CMD_LEN);
-                    vlan_count += 1;
-                }
-            }
-            /* If the trunk vlans are not defined in the global list. */
-            if (vlan_count == 0) {
-                goto done;
+                ovs_assert(n <= MAX_CMD_LEN);
+                vlan_count += 1;
             }
         }
+        /* If the trunk vlans are not defined in the global list. */
+        if (vlan_count == 0) {
+            goto done;
+        }
+
+    } else {
+      if (bundle->vlan_mode != PORT_VLAN_ACCESS) {
+        for (i = 1; i < 4095; i++) {
+            if (bitmap_is_set(ofproto->vlans_bmp, i)) {
+                if (vlan_count == 0) {
+                    n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n),
+                                  " trunks=%d", i);
+                } else {
+                    n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), ",%d",
+                                  i);
+                }
+
+                ovs_assert(n <= MAX_CMD_LEN);
+                vlan_count += 1;
+            }
+        }
+        /* If the trunk vlans are not defined in the global list. */
+        if (vlan_count == 0) {
+            goto done;
+        }
+      }
     }
 
     if (bundle->vlan_mode == PORT_VLAN_ACCESS) {
@@ -648,7 +653,7 @@ bundle_configure(struct ofbundle *bundle)
 
 done:
     /* Install IP table rules to prevent the traffic going to kernel IP stack.
-     * When L2 switching is enabled on a port, ASIC OVS takes care of switch
+     * When L2 switching is enabled on a port, ASIC OVS takes care of switching
      * the packets. We only depend on kernel to do L3 routing. */
     LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
 
@@ -800,15 +805,14 @@ found:     ;
 
     bundle->vlan_mode = s->vlan_mode;
 
-    if ((s->vlan > 0) && (s->vlan <= 4095)) {
+    if ((s->vlan > 0) && (s->vlan < 4095)) {
         bundle->vlan = s->vlan;
     } else {
-        bundle->vlan = 0;
+        bundle->vlan = -1;
     }
 
     if (s->trunks) {
         trunks = CONST_CAST(unsigned long *, s->trunks);
-
         if (!vlan_bitmap_equal(trunks, bundle->trunks)) {
             free(bundle->trunks);
             bundle->trunks = vlan_bitmap_clone(trunks);
