@@ -24,6 +24,7 @@
 
 #define MAX_CLI                 1024
 #define OVS_VSCTL               "/opt/openvswitch/bin/ovs-vsctl"
+#define ASIC_OVSDB_PATH         "/var/run/openvswitch-sim/ovsdb.db"
 
 struct sim_provider_rule {
     struct rule up;
