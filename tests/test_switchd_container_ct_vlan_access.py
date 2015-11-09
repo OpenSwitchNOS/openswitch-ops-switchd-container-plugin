@@ -19,6 +19,21 @@ from opsvsi.docker import *
 from opsvsi.opsvsitest import *
 from opsvsiutils.systemutil import *
 
+def checkPing(pingOutput):
+        '''Parse ping output and check to see if one of the pings succeeded or failed'''
+        # Check for downed link
+        if 'Destination Host Unreachable' in pingOutput:
+            return False
+        r = r'(\d+) packets transmitted, (\d+) received'
+        m = re.search(r, pingOutput)
+        if m is None:
+            return False
+        sent, received = int(m.group(1)), int(m.group(2))
+        if sent >= 1 and received >=1:
+            return True
+        else:
+            return False
+
 class vlanTagTest( OpsVsiTest ):
 
     def setupNet(self):
@@ -120,9 +135,9 @@ class vlanTagTest( OpsVsiTest ):
         s1.ovscmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=access tag=100")
         s1.ovscmd("/usr/bin/ovs-vsctl set interface 2 user_config:admin=up")
 
-        out = h1.cmd("ping -c1 %s" % h2.IP())
+        out = h1.cmd("ping -c5 %s" % h2.IP())
 
-        status = parsePing(out)
+        status = checkPing(out)
         assert status, "Ping Failed even though VLAN and ports were configured correctly"
         info("\n### Ping Success ###\n")
 
@@ -156,9 +171,9 @@ class vlanTagTest( OpsVsiTest ):
         s1.ovscmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=access tag=100")
         s1.ovscmd("/usr/bin/ovs-vsctl set interface 2 user_config:admin=up")
 
-        out = h1.cmd("ping -c1 %s" % h2.IP())
+        out = h1.cmd("ping -c5 %s" % h2.IP())
 
-        status = parsePing(out)
+        status = checkPing(out)
         assert not status, "Ping Success even though global VLAN was missing"
         info("\n### Ping Failed ###\n")
 
@@ -169,9 +184,9 @@ class vlanTagTest( OpsVsiTest ):
              "get added in the ASIC OVS ###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl add-vlan br0 100 admin=up")
         time.sleep(1)
-        out = h1.cmd("ping -c1 %s" % h2.IP())
+        out = h1.cmd("ping -c5 %s" % h2.IP())
 
-        status = parsePing(out)
+        status = checkPing(out)
         assert status, "Ping Failed even though global VLAN was added. \
                        Ports are expected to get reconfigured"
         info("\n### Ping Success ###\n")
@@ -209,9 +224,9 @@ class vlanTagTest( OpsVsiTest ):
         s1.ovscmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=access tag=200")
         s1.ovscmd("/usr/bin/ovs-vsctl set interface 2 user_config:admin=up")
 
-        out = h1.cmd("ping -c1 %s" % h2.IP())
+        out = h1.cmd("ping -c5 %s" % h2.IP())
 
-        status = parsePing(out)
+        status = checkPing(out)
         assert not status, \
                "Ping Success even though ports have different tags"
         info("### Ping Failed ###\n")
@@ -224,9 +239,9 @@ class vlanTagTest( OpsVsiTest ):
         s1.ovscmd("/usr/bin/ovs-vsctl del-port 2")
         s1.ovscmd("/usr/bin/ovs-vsctl add-port br0 2 vlan_mode=access tag=100")
         s1.ovscmd("/usr/bin/ovs-vsctl set interface 2 user_config:admin=up")
-        out = h1.cmd("ping -c1 %s" % h2.IP())
+        out = h1.cmd("ping -c5 %s" % h2.IP())
 
-        status = parsePing(out)
+        status = checkPing(out)
         assert status, \
                "Ping Failed even though ports on both the switches \
                have same tags"
