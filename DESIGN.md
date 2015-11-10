@@ -184,7 +184,7 @@ The `ofproto` class functions are loaded dynamically via a plugin. It allows fle
 
 ## References
 -------------
-* [OpenSwitch](http://www.openswitch.net/docs/redest1)
+* [OpenSwitch](http://www.openswitch.net/)
 * [Open vSwitch](http://www.openvswitch.org/)
 * [Docker](http://www.docker.com/)
-* [Mininet](http:/www.mininet.org/)
+* [Mininet](http://www.mininet.org/)
