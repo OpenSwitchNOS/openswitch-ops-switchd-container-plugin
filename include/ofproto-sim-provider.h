@@ -24,6 +24,8 @@
 
 #define MAX_CLI                 1024
 #define OVS_VSCTL               "/opt/openvswitch/bin/ovs-vsctl"
+#define HOSTSFLOW_CFG_FILENAME  "/etc/hsflowd.conf"
+#define HOSTSFLOW_ULOG_GRP      5
 
 struct sim_provider_rule {
     struct rule up;
@@ -106,6 +108,14 @@ struct sim_provider_ofport {
                                  */
 };
 
+struct sim_sflow_cfg {
+    struct sset ports; /* port names where sflow config is applied (for VRF) */
+    struct sset targets;
+    uint32_t sampling_rate;
+    char *agent_device;
+    bool set;
+};
+
 struct sim_provider_node {
     struct hmap_node all_sim_provider_node;     /* In 'all_ofproto_provider'. */
     struct ofproto up;
@@ -163,6 +173,7 @@ struct sim_provider_node {
 
     bool vrf;                   /* Specifies whether specific ofproto instance
                                  * is backing up VRF and not bridge */
+    struct sim_sflow_cfg sflow; /* sflow configuration */
 };
 
 struct sim_provider_port_dump_state {

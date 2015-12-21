@@ -1234,6 +1234,301 @@ get_netflow_ids(const struct ofproto *ofproto_ OVS_UNUSED,
     return;
 }
 
+static void
+sflow_cfg_clear(struct sim_sflow_cfg *sim_cfg)
+{
+    if (sim_cfg && sim_cfg->set) {
+        sset_destroy(&sim_cfg->ports);
+        sset_destroy(&sim_cfg->targets);
+        if (sim_cfg->agent_device) {
+            free(sim_cfg->agent_device);
+        }
+        sim_cfg->set = false;
+    }
+}
+
+static void
+sflow_iptable_del_all(void)
+{
+    /* delete all sflow related iptable rules in the system */
+    if ((system("iptables -S | sed \"/SFLOW/s/-A/iptables -D/e\"")) != 0) {
+        VLOG_ERR("Failed to delete all iptable rules, rc=%s", strerror(errno));
+    }
+}
+
+static void
+sflow_disable(struct sim_provider_node *ofproto,
+              struct sim_sflow_cfg *sim_cfg)
+{
+    int cmd_len = 0;
+    char cmd_str[MAX_CMD_LEN];
+
+    sflow_cfg_clear(sim_cfg);
+
+    if (ofproto->vrf) {
+        sflow_iptable_del_all();
+        /* stop host sflow agent */
+        if ((system("/etc/init.d/hsflowd stop")) != 0) {
+            VLOG_ERR("Failed to stop host sflow agent, rc=%s", strerror(errno));
+        }
+    } else {
+        /* remove the sflow config from bridge */
+        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                            "%s list bridge %s | grep sflow | "
+                            "awk -F ': ' '{print $2}' "
+                            "| xargs %s remove bridge %s sflow",
+                            OVS_VSCTL, ofproto->up.name,
+                            OVS_VSCTL, ofproto->up.name);
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to remove sflow config from bridge %s. cmd='%s', rc=%s",
+                      ofproto->up.name, cmd_str, strerror(errno));
+        }
+    }
+
+}
+
+static bool
+string_is_equal(char *str1, char *str2)
+{
+    if (str1 && str2) {
+        return !strcmp(str1, str2);
+    } else {
+        return (!str1 && !str2);
+    }
+}
+
+static bool
+sflow_cfg_equal(struct ofproto_sflow_options *ofproto_cfg,
+                struct sim_sflow_cfg *sim_cfg)
+{
+    return (sset_equals(&ofproto_cfg->targets, &sim_cfg->targets)
+            && (ofproto_cfg->sampling_rate == sim_cfg->sampling_rate)
+            && (string_is_equal(ofproto_cfg->agent_device,
+                                sim_cfg->agent_device)));
+}
+
+static void
+sflow_cfg_set(struct ofproto_sflow_options *ofproto_cfg,
+              struct sim_sflow_cfg *sim_cfg)
+{
+    if (!ofproto_cfg || !sim_cfg) {
+        return;
+    }
+    sim_cfg->sampling_rate = ofproto_cfg->sampling_rate;
+    sset_init(&sim_cfg->ports);
+    sset_clone(&sim_cfg->targets, &ofproto_cfg->targets);
+    sim_cfg->agent_device = ofproto_cfg->agent_device ?
+                            strdup(ofproto_cfg->agent_device) : NULL;
+
+    sim_cfg->set = true;
+}
+
+/* add iptable rules to collect packets using the ulog facility in Linux */
+static void
+sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
+{
+    int cmd_len = 0;
+    char cmd_str[MAX_CMD_LEN];
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+            "iptables -I INPUT -i %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
+            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+    }
+    cmd_len = 0;
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+            "iptables -I OUTPUT -o %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
+            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+    }
+}
+
+static void
+sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
+{
+    int cmd_len = 0;
+    char cmd_str[MAX_CMD_LEN];
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+            "iptables -D INPUT -i %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
+            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+    }
+    cmd_len = 0;
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+            "iptables -D OUTPUT -o %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
+            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+    }
+}
+
+static void
+sflow_iptables_reconfigure(struct sim_provider_node *ofproto,
+                           struct sim_sflow_cfg *sim_cfg)
+{
+    const char *name;
+    /* check if new ports added under ofproto */
+    SSET_FOR_EACH(name, &ofproto->ports) {
+        VLOG_DBG("ofproto->ports : %s\n", name);
+        if (!sset_contains(&sim_cfg->ports, name)) {
+            sflow_iptable_add(sim_cfg, name);
+        }
+    }
+    /* check if ports got deleted from ofproto */
+    SSET_FOR_EACH(name, &sim_cfg->ports) {
+        VLOG_DBG("sim_cfg->ports : %s\n", name);
+        if (!sset_contains(&ofproto->ports, name)) {
+            sflow_iptable_del(sim_cfg, name);
+        }
+    }
+    sset_destroy(&sim_cfg->ports);
+    sset_clone(&sim_cfg->ports, &ofproto->ports);
+}
+
+/* Configure openvswitch-sim's db with sflow configs */
+static void
+sflow_ovs_configure(struct sim_provider_node *ofproto,
+                    struct ofproto_sflow_options *ofproto_cfg)
+{
+    int cmd_len = 0;
+    const char *target_name;
+    char cmd_str[MAX_CMD_LEN];
+
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        "%s -- --id=@sflow create sflow ",
+                        OVS_VSCTL);
+    if (ofproto_cfg->agent_device) {
+        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                            "agent=%s ", ofproto_cfg->agent_device);
+    }
+    if (sset_count(&ofproto_cfg->targets) > 0) {
+        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                            "target=");
+        SSET_FOR_EACH(target_name, &ofproto_cfg->targets) {
+            cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                                "\\\"%s\\\",", target_name);
+        }
+        cmd_len--; /* to remove the last , */
+    }
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        " header=%d sampling=%d -- set bridge %s sflow=@sflow",
+                        ofproto_cfg->header_len,
+                        ofproto_cfg->sampling_rate, ofproto->up.name);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to set sflow on bridge '%s'. cmd='%s', rc=%s",
+                 ofproto->up.name, cmd_str, strerror(errno));
+    }
+}
+
+/* configure host sflow agent and restart it */
+static void
+sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
+{
+    int cmd_len = 0;
+    const char *target_name;
+    char cmd_str[MAX_CMD_LEN];
+    FILE *fp = fopen(HOSTSFLOW_CFG_FILENAME, "w");
+
+    if (!fp) {
+        VLOG_ERR("Failed to open host sflow cfg file '%s'. rc='%s'",
+                 HOSTSFLOW_CFG_FILENAME, strerror(errno));
+        return;
+    }
+    /* write to the config file */
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "sflow {\n");
+    if (ofproto_cfg->agent_device) {
+        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                            "agent = %s\n", ofproto_cfg->agent_device);
+    }
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "DNSSD = off\n");
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        "sampling = %d\n", ofproto_cfg->sampling_rate);
+    SSET_FOR_EACH(target_name, &ofproto_cfg->targets) {
+        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                            "collector {\n");
+        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                            "ip = %s\n", target_name);
+        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "}\n");
+    }
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        "ulogGroup = %d\n", HOSTSFLOW_ULOG_GRP);
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        "ulogProbability = %0.3f\n", 1/(double)ofproto_cfg->sampling_rate);
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "}\n");
+    VLOG_DBG("cmd_len %d. Wrote (%d)\n", fprintf(fp, "%s", cmd_str));
+    fclose(fp);
+
+    /* restart host sflow agent */
+    if ((system("/etc/init.d/hsflowd restart")) != 0) {
+        VLOG_ERR("Failed to restart host sflow agent, rc=%s", strerror(errno));
+        return;
+    }
+}
+
+/* sflow config handling modelled after dpif-sflow implementation in OpenvSwitch */
+static int
+set_sflow(struct ofproto *ofproto_,
+          const struct ofproto_sflow_options *ofproto_cfg)
+{
+
+    int error = 0;
+    int target_count = 0;
+    const char *target_name;
+    struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+    struct sim_sflow_cfg *sim_cfg = &ofproto->sflow;
+
+    if (!ofproto_cfg) {
+        VLOG_DBG("set_sflow : ofproto_sflow_cfg NULL\n");
+        sflow_disable(ofproto, sim_cfg);
+        return 0;
+    }
+
+    VLOG_DBG("sflow config : sampling : %d, polling : %d, header : %d, "
+             "agent_dev : %s, num_targets : %d\n",
+             ofproto_cfg->sampling_rate, ofproto_cfg->polling_interval,
+             ofproto_cfg->header_len, ofproto_cfg->agent_device,
+             sset_count(&ofproto_cfg->targets));
+    SSET_FOR_EACH(target_name, &ofproto_cfg->targets) {
+        VLOG_DBG("target [%d] : [%s]\n", target_count++, target_name);
+    }
+
+    if (sset_is_empty(&ofproto_cfg->targets) ||
+                      ofproto_cfg->sampling_rate == 0) {
+        VLOG_DBG("set_sflow : targets or sampling_rate not set (%d %d)\n",
+                 sset_count(&ofproto_cfg->targets), ofproto_cfg->sampling_rate);
+        sflow_disable(ofproto, sim_cfg);
+        return 0;
+    }
+
+    if (sflow_cfg_equal((struct ofproto_sflow_options *)ofproto_cfg, sim_cfg)) {
+        VLOG_DBG("set sflow: configs same\n");
+        if (ofproto->vrf) {
+            sflow_iptables_reconfigure(ofproto, sim_cfg);
+        }
+        return 0;
+    }
+
+    sflow_cfg_clear(sim_cfg);
+    sflow_cfg_set((struct ofproto_sflow_options *)ofproto_cfg, sim_cfg);
+
+    if (ofproto->vrf) { /* for L3 interfaces, use host sflow agent */
+        sflow_iptable_del_all();
+        sset_destroy(&sim_cfg->ports);
+        sflow_iptables_reconfigure(ofproto, sim_cfg);
+        sflow_hostsflow_agent_configure((struct ofproto_sflow_options *)ofproto_cfg);
+    } else { /* for L2 interfaces, set up sflow on the bridge using ovs-sim */
+        sflow_ovs_configure(ofproto, (struct ofproto_sflow_options *)ofproto_cfg);
+
+    }
+    return error;
+}
+
 #if 0
 static enum ofperr
 set_config(struct ofproto *ofproto_,
@@ -1306,7 +1601,7 @@ const struct ofproto_class ofproto_sim_provider_class = {
     packet_out,
     NULL,                       /* may implement set_netflow */
     get_netflow_ids,
-    NULL,                       /* may implement set_sflow */
+    set_sflow,                  /* set_sflow */
     NULL,                       /* may implement set_ipfix */
     NULL,                       /* may implement set_cfm */
     cfm_status_changed,
