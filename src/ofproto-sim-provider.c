@@ -105,6 +105,12 @@ port_open_type(const char *datapath_type OVS_UNUSED, const char *port_type)
     if (port_type && (strcmp(port_type, OVSREC_INTERFACE_TYPE_INTERNAL) == 0)) {
         return port_type;
     }
+    if (port_type && (strcmp(port_type, OVSREC_INTERFACE_TYPE_VLANSUBINT) == 0)) {
+            return port_type;
+    }
+    if (port_type && (strcmp(port_type, OVSREC_INTERFACE_TYPE_LOOPBACK) == 0)) {
+            return port_type;
+    }
     return "system";
 }
 
@@ -673,6 +679,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     bundle = bundle_lookup(ofproto, aux);
 
     if (!bundle) {
+        VLOG_DBG("bundle created\n");
         bundle = xmalloc(sizeof (struct ofbundle));
 
         bundle->ofproto = ofproto;
@@ -694,10 +701,12 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     if (!bundle->name || strcmp(s->name, bundle->name)) {
         free(bundle->name);
         bundle->name = xstrdup(s->name);
+        VLOG_DBG("bundle name is %s",bundle->name);
     }
 
     /* Update set of ports. */
     ok = true;
+    VLOG_DBG("s->n_slaves %d", s->n_slaves);
     for (i = 0; i < s->n_slaves; i++) {
         if (!bundle_add_port(bundle, s->slaves[i])) {
             ok = false;
@@ -720,6 +729,7 @@ found:     ;
     ovs_assert(list_size(&bundle->ports) <= s->n_slaves);
 
     if (list_is_empty(&bundle->ports)) {
+        VLOG_DBG("bundle %s destroyed\n",bundle->name);
         bundle_destroy(bundle);
         return EINVAL;
     }
@@ -778,6 +788,7 @@ found:     ;
      * bundle, then there is no need to do any special handling. Kernel will
      * take care of routing. */
     if (ofproto->vrf == true) {
+        VLOG_DBG("bundle is attached to VRF, Kernel will take care of routing\n");
         return 0;
     }
 
