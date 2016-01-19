@@ -1,5 +1,5 @@
 /*
- * (c) Copyright 2015 Hewlett Packard Enterprise Development LP
+ * (c) Copyright 2015-2016 Hewlett Packard Enterprise Development LP
  * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,8 @@
  */
 
 #include <errno.h>
+#include <unistd.h>
+#include <net/if.h>
 
 #include "config.h"
 #include "ofproto/ofproto-provider.h"
@@ -139,18 +141,10 @@ construct(struct ofproto *ofproto_)
      * port with the same name. The port will be 'internal' type. */
     if (strcmp(ofproto_->type, "system") == 0) {
 
-        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s",
-                 OVS_VSCTL, ofproto->up.name);
+        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s -- set bridge %s datapath_type=netdev",
+                 OVS_VSCTL, ofproto->up.name, ofproto->up.name);
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to add bridge in ASIC OVS. cmd=%s, rc=%s",
-                     cmd_str, strerror(errno));
-            error = 1;
-        }
-
-        snprintf(cmd_str, MAX_CMD_LEN, "%s set br %s datapath_type=netdev",
-                 OVS_VSCTL, ofproto->up.name);
-        if (system(cmd_str) != 0) {
-            VLOG_ERR("Failed to set bridge datapath_type. cmd=%s, rc=%s",
                      cmd_str, strerror(errno));
             error = 1;
         }
@@ -523,6 +517,7 @@ bundle_configure(struct ofbundle *bundle)
     char cmd_str[MAX_CMD_LEN];
     int i = 0, n = 0, n_ports = 0;
     uint32_t vlan_count = 0;
+    char port_name[IFNAMSIZ];
 
     /* If this bundle is already added in the ASIC simulator OVS then delete
      * it. We are going to re-create it with new config again. */
@@ -563,9 +558,10 @@ bundle_configure(struct ofbundle *bundle)
         ovs_assert(n <= MAX_CMD_LEN);
     }
 
-    /* Always configure bond_mode as balance-slb to get active-active links. */
+    /* Always configure bond_mode as active-backup, balance-slb is not supported */
+    /* for two upstream switches using lag*/
     if (n_ports > 1) {
-        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " bond_mode=balance-slb");
+        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " bond_mode=active-backup");
         ovs_assert(n <= MAX_CMD_LEN);
     }
 
@@ -638,6 +634,33 @@ bundle_configure(struct ofbundle *bundle)
         VLOG_ERR("Failed to create bundle. %s, %s", cmd_str, strerror(errno));
     } else {
         bundle->is_added_to_sim_ovs = true;
+
+        /* In order to LAG to work using active-backup we need to choose the active slave,
+         * to do this we choose the smaller port alphabetically always*/
+
+        if (n_ports > 1) {
+
+            INIT_CONTAINER(port, (&bundle->ports)->next, bundle_node);
+            strncpy(port_name, netdev_get_name(port->up.netdev), IFNAMSIZ);
+
+            LIST_FOR_EACH_SAFE(port, next_port, bundle_node, (&bundle->ports)) {
+                if(strncmp(port_name, netdev_get_name(port->up.netdev), IFNAMSIZ) > 0){
+                    strncpy(port_name, netdev_get_name(port->up.netdev), IFNAMSIZ);
+                }
+            }
+
+            /* Make sure this command is executed */
+            n = snprintf(&cmd_str[0], (MAX_CMD_LEN),
+                          "%s --target=%s bond/set-active-slave %s %s"
+                          , APPCTL, OVS_SIM, bundle->name, port_name);
+
+            VLOG_INFO("bond %s: %s", bundle->name, cmd_str);
+            ovs_assert(n <= MAX_CMD_LEN);
+
+            while (system(cmd_str) != 0) {
+                VLOG_ERR("Failed to set active slave, trying again. %s, %s",cmd_str,strerror(errno));
+            }
+        }
     }
 
 done:
