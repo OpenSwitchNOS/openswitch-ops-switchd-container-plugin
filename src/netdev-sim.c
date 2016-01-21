@@ -32,6 +32,7 @@
 
 #include "openvswitch/vlog.h"
 #include "netdev-sim.h"
+#include "ovs-atomic.h"
 
 #define SWNS_EXEC       "/sbin/ip netns exec swns"
 
@@ -264,13 +265,13 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 
 static int
 netdev_sim_set_etheraddr(struct netdev *netdev,
-                           const uint8_t mac[ETH_ADDR_LEN])
+                           const struct eth_addr mac)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);
-    if (!eth_addr_equals(dev->hwaddr, mac)) {
-        memcpy(dev->hwaddr, mac, ETH_ADDR_LEN);
+    if (memcmp(dev->hwaddr, mac.ea, ETH_ADDR_LEN)) {
+        memcpy(dev->hwaddr, mac.ea, ETH_ADDR_LEN);
         netdev_change_seq_changed(netdev);
     }
     ovs_mutex_unlock(&dev->mutex);
@@ -280,12 +281,12 @@ netdev_sim_set_etheraddr(struct netdev *netdev,
 
 static int
 netdev_sim_get_etheraddr(const struct netdev *netdev,
-                           uint8_t mac[ETH_ADDR_LEN])
+                           struct eth_addr *mac)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);
-    memcpy(mac, dev->hwaddr, ETH_ADDR_LEN);
+    memcpy(mac->ea, dev->hwaddr, ETH_ADDR_LEN);
     ovs_mutex_unlock(&dev->mutex);
 
     return 0;
