@@ -1344,6 +1344,22 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
+    cmd_len = 0;
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+            "iptables -I FORWARD -i %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
+            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+    }
+    cmd_len = 0;
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+            "iptables -I FORWARD -o %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
+            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+    }
 }
 
 static void
@@ -1356,7 +1372,7 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
             port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
-        VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        VLOG_ERR("Failed to del INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
@@ -1364,22 +1380,23 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
             port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
-        VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        VLOG_ERR("Failed to del OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
-}
-
-static void
-sflow_iptables_config_forward_rules(struct sim_provider_node *ofproto,
-                                    struct sim_sflow_cfg *sim_cfg)
-{
-    int cmd_len = 0;
-    char cmd_str[MAX_CMD_LEN];
+    cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -I FORWARD -m statistic --mode random --probability %0.3f -j ULOG "
+            "iptables -D FORWARD -i %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
-        VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+    }
+    cmd_len = 0;
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+            "iptables -D FORWARD -o %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
+            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
 }
 
@@ -1537,7 +1554,6 @@ set_sflow(struct ofproto *ofproto_,
     if (ofproto->vrf) { /* for L3 interfaces, use host sflow agent */
         sflow_iptable_del_all();
         sset_destroy(&sim_cfg->ports);
-        sflow_iptables_config_forward_rules(ofproto, sim_cfg);
         sflow_iptables_reconfigure(ofproto, sim_cfg);
         sflow_hostsflow_agent_configure((struct ofproto_sflow_options *)ofproto_cfg);
     } else { /* for L2 interfaces, set up sflow on the bridge using ovs-sim */
