@@ -36,6 +36,7 @@
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
 #include "netdev-sim.h"
+#include "ops-classifier-sim.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
@@ -46,13 +47,6 @@ sim_provider_ofport_cast(const struct ofport *ofport)
         CONTAINER_OF(ofport, struct sim_provider_ofport, up) : NULL;
 }
 
-static inline struct sim_provider_node *
-sim_provider_node_cast(const struct ofproto *ofproto)
-{
-    ovs_assert(ofproto->ofproto_class == &ofproto_sim_provider_class);
-
-    return CONTAINER_OF(ofproto, struct sim_provider_node, up);
-}
 
 /* All existing ofproto provider instances, indexed by ->up.name. */
 static struct hmap all_sim_provider_nodes =
@@ -312,7 +306,7 @@ bfd_status_changed(struct ofport *ofport_ OVS_UNUSED)
     return false;
 }
 
-static struct ofbundle *
+struct ofbundle *
 bundle_lookup(const struct sim_provider_node *ofproto, void *aux)
 {
     struct ofbundle *bundle;
@@ -1674,6 +1668,12 @@ set_sflow(struct ofproto *ofproto_,
     return 0;
 }
 
+void register_asic_plugins(void)
+{
+    /* Register OPS_CLS_PLUGIN */
+    register_ops_cls_plugin();
+}
+
 #if 0
 static enum ofperr
 set_config(struct ofproto *ofproto_,
@@ -1799,5 +1799,5 @@ const struct ofproto_class ofproto_sim_provider_class = {
     NULL,                       /* Get l3 host entry hit bits */
     NULL,                       /* l3 route action - install, update, delete */
     NULL,                       /* enable/disable ECMP globally */
-    NULL,                       /* enable/disable ECMP hash configs */
+    NULL                        /* enable/disable ECMP hash configs */
 };
