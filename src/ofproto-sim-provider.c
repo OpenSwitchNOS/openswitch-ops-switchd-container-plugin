@@ -35,6 +35,7 @@
 #include "openvswitch/vlog.h"
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
+#include "ops-classifier-sim.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
@@ -48,13 +49,6 @@ sim_provider_ofport_cast(const struct ofport *ofport)
         CONTAINER_OF(ofport, struct sim_provider_ofport, up) : NULL;
 }
 
-static inline struct sim_provider_node *
-sim_provider_node_cast(const struct ofproto *ofproto)
-{
-    ovs_assert(ofproto->ofproto_class == &ofproto_sim_provider_class);
-
-    return CONTAINER_OF(ofproto, struct sim_provider_node, up);
-}
 
 /* All existing ofproto provider instances, indexed by ->up.name. */
 static struct hmap all_sim_provider_nodes =
@@ -314,7 +308,7 @@ bfd_status_changed(struct ofport *ofport_ OVS_UNUSED)
     return false;
 }
 
-static struct ofbundle *
+struct ofbundle *
 bundle_lookup(const struct sim_provider_node *ofproto, void *aux)
 {
     struct ofbundle *bundle;
@@ -1400,4 +1394,12 @@ const struct ofproto_class ofproto_sim_provider_class = {
     NULL,                       /* l3 route action - install, update, delete */
     NULL,                       /* enable/disable ECMP globally */
     NULL,                       /* enable/disable ECMP hash configs */
+
+    ops_cls_pd_apply,           /* ops-classifier functions */
+    ops_cls_pd_remove,
+    ops_cls_pd_replace,
+    ops_cls_pd_list_update,
+    ops_cls_pd_statistics_get,
+    ops_cls_pd_statistics_clear,
+    ops_cls_pd_statistics_clear_all
 };
