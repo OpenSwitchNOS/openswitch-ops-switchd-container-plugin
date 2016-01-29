@@ -253,6 +253,7 @@ static void rule_get_stats(struct rule *, uint64_t * packets,
 static void bundle_remove(struct ofport *);
 static struct sim_provider_ofport *get_ofp_port(const struct sim_provider_node
                                                 *ofproto, ofp_port_t ofp_port);
+struct ofbundle *bundle_lookup(const struct sim_provider_node *ofproto, void *aux);
 
 static struct mirror *mirror_lookup(struct mbridge *, void *aux);
 static struct mbundle *mbundle_lookup(const struct mbridge *,
@@ -266,4 +267,13 @@ extern const struct ofproto_class ofproto_sim_provider_class;
 
 int register_qos_extension(void);
 
+static inline struct sim_provider_node *
+sim_provider_node_cast(const struct ofproto *ofproto)
+{
+    ovs_assert(ofproto->ofproto_class == &ofproto_sim_provider_class);
+
+    return CONTAINER_OF(ofproto, struct sim_provider_node, up);
+}
+
+void register_asic_plugins(void);
 #endif /* ofproto/ofproto-sim-provider.h */
