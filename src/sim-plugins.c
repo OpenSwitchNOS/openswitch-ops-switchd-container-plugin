@@ -22,6 +22,7 @@
 #include "ofproto-sim-provider.h"
 #include "eventlog.h"
 #include "sim-copp-plugin.h"
+#include "ops-classifier-sim.h"
 
 #define init libovs_sim_plugin_LTX_init
 #define run libovs_sim_plugin_LTX_run
@@ -80,6 +81,11 @@ init(void)
 
     register_qos_extension();
     sim_copp_init();
+    /* Register ASIC plugins */
+    register_asic_plugins();
+
+    /* Initialize classifier debug */
+    classifier_sim_debug_init();
 }
 
 void
