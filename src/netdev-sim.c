@@ -24,6 +24,8 @@
 #include <sys/socket.h>
 #include <net/ethernet.h>
 #include <linux/ethtool.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <net/if.h>
@@ -69,6 +71,12 @@ struct netdev_sim {
 };
 
 static int netdev_sim_construct(struct netdev *);
+
+static void
+netdev_parse_netlink_msg(struct nlmsghdr *h, struct netdev_stats *stats);
+
+static int
+netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats);
 
 static bool
 is_sim_class(const struct netdev_class *class)
@@ -295,7 +303,13 @@ static int
 netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
-
+    int rc = 0;
+    rc = netdev_get_kernel_stats(dev->linux_intf_name, &dev->stats);
+    if (rc < 0)
+    {
+        VLOG_ERR("Failed to get interface statistics for interface %s", dev->linux_intf_name);
+        return -1;
+    }
     ovs_mutex_lock(&dev->mutex);
     *stats = dev->stats;
     ovs_mutex_unlock(&dev->mutex);
@@ -525,9 +539,155 @@ static const struct netdev_class sim_internal_class = {
     NULL,                       /* rxq_wait */
     NULL,                       /* rxq_drain */
 };
+
 void
 netdev_sim_register(void)
 {
     netdev_register_provider(&sim_class);
     netdev_register_provider(&sim_internal_class);
+}
+
+static void
+netdev_parse_netlink_msg(struct nlmsghdr *h, struct netdev_stats *stats)
+{
+    struct ifinfomsg *iface;
+    struct rtattr *attribute;
+    struct rtnl_link_stats *s;
+    int len;
+
+    iface = NLMSG_DATA(h);
+    len = h->nlmsg_len - NLMSG_LENGTH(sizeof(*iface));
+    for (attribute = IFLA_RTA(iface); RTA_OK(attribute, len);
+         attribute = RTA_NEXT(attribute, len)) {
+        switch(attribute->rta_type) {
+        case IFLA_STATS:
+            s = (struct rtnl_link_stats *) RTA_DATA(attribute);
+            stats->rx_packets = s->rx_packets;
+            stats->tx_packets = s->tx_packets;
+            stats->rx_bytes = s->rx_bytes;
+            stats->tx_bytes = s->tx_bytes;
+            stats->rx_errors = s->rx_errors;
+            stats->tx_errors = s->tx_errors;
+            stats->rx_dropped = s->rx_dropped;
+            stats->tx_dropped = s->tx_dropped;
+            stats->multicast = s->multicast;
+            stats->collisions = s->collisions;
+            stats->rx_crc_errors = s->rx_crc_errors;
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+static int
+netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats)
+{
+    int sock;
+    struct sockaddr_nl s_addr;
+    struct {
+        struct nlmsghdr hdr;
+        struct ifinfomsg iface;
+    } req;
+    struct sockaddr_nl kernel;
+    struct msghdr rtnl_msg;
+    struct iovec io;
+
+    memset (&req, 0, sizeof(req));
+    memset (&kernel, 0, sizeof(kernel));
+    memset (&rtnl_msg, 0, sizeof(rtnl_msg));
+    kernel.nl_family = AF_NETLINK;
+
+    req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+    req.hdr.nlmsg_flags = NLM_F_REQUEST;
+    req.hdr.nlmsg_type = RTM_GETLINK;
+
+    req.iface.ifi_family = AF_UNSPEC;
+    req.iface.ifi_type = IFLA_UNSPEC;
+    req.iface.ifi_flags = 0;
+    req.iface.ifi_change = 0xffffffff;
+    req.iface.ifi_index = if_nametoindex(if_name);
+
+    sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+
+    if (sock < 0) {
+        VLOG_ERR("Netlink socket creation failed during netlink \
+                request for statistics (%s)",strerror(errno));
+        return -1;
+    }
+
+    memset((void *) &s_addr, 0, sizeof(s_addr));
+    s_addr.nl_family = AF_NETLINK;
+    s_addr.nl_pid = getpid();
+    s_addr.nl_groups = 0;
+
+    if (bind(sock, (struct sockaddr *) &s_addr, sizeof(s_addr)) < 0) {
+        VLOG_ERR("Socket bind failed during netlink \
+                request for statistics");
+        close(sock);
+        return -1;
+    }
+
+    io.iov_base = &req;
+    io.iov_len = req.hdr.nlmsg_len;
+    rtnl_msg.msg_name = &kernel;
+    rtnl_msg.msg_namelen = sizeof(kernel);
+    rtnl_msg.msg_iov = &io;
+    rtnl_msg.msg_iovlen = 1;
+
+    sendmsg(sock, (struct msghdr *) &rtnl_msg, 0);
+
+    /* Prepare for reply from the kernel */
+    bool multipart_msg_end = false;
+
+    while (!multipart_msg_end) {
+        struct sockaddr_nl nladdr;
+        struct msghdr msg;
+        struct iovec iov;
+        struct nlmsghdr *nlh;
+        char buffer[4096];
+        int ret;
+
+        iov.iov_base = (void *)buffer;
+        iov.iov_len = sizeof(buffer);
+        msg.msg_name = (void *)&(nladdr);
+        msg.msg_namelen = sizeof(nladdr);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+
+        ret = recvmsg(sock, &msg, 0);
+
+        if (ret < 0) {
+            VLOG_ERR("Reply error during netlink \
+                     request for statistics\n");
+            close(sock);
+            return -1;
+        }
+
+        nlh = (struct nlmsghdr*) buffer;
+
+        for (nlh = (struct nlmsghdr *) buffer;
+             NLMSG_OK(nlh, ret);
+             nlh = NLMSG_NEXT(nlh, ret)) {
+            switch(nlh->nlmsg_type) {
+            case RTM_NEWLINK:
+                netdev_parse_netlink_msg(nlh, stats);
+                break;
+
+            case NLMSG_DONE:
+                multipart_msg_end = true;
+                break;
+
+            default:
+                break;
+            }
+
+            if (!(nlh->nlmsg_flags & NLM_F_MULTI)) {
+                multipart_msg_end = true;
+            }
+        }
+    }
+    close(sock);
+
+    return 0;
 }
