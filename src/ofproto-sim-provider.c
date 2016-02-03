@@ -1430,7 +1430,9 @@ sflow_ovs_configure(struct sim_provider_node *ofproto,
 {
     int cmd_len = 0;
     const char *target_name;
+    char tmp_ip[MAX_CMD_LEN];
     char cmd_str[MAX_CMD_LEN];
+    char *ip = NULL, *port = NULL;
 
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
                         "%s -- --id=@sflow create sflow ",
@@ -1443,8 +1445,16 @@ sflow_ovs_configure(struct sim_provider_node *ofproto,
         cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
                             "target=");
         SSET_FOR_EACH(target_name, &ofproto_cfg->targets) {
-            cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-                                "\\\"%s\\\",", target_name);
+            strncpy(tmp_ip, target_name, MAX_CMD_LEN);
+            ip = strtok(tmp_ip, "/");
+            port = strtok(NULL, "/");
+            if (ip && port) {
+                cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                                    "\\\"%s:%s\\\",", ip, port);
+            } else if (ip) {
+                cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                                    "\\\"%s\\\",", ip);
+            }
         }
         cmd_len--; /* to remove the last , */
     }
@@ -1464,7 +1474,9 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
 {
     int cmd_len = 0;
     const char *target_name;
+    char tmp_ip[MAX_CMD_LEN];
     char cmd_str[MAX_CMD_LEN];
+    char *ip = NULL, *port = NULL;
     FILE *fp = fopen(HOSTSFLOW_CFG_FILENAME, "w");
 
     if (!fp) {
@@ -1484,8 +1496,17 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     SSET_FOR_EACH(target_name, &ofproto_cfg->targets) {
         cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
                             "collector {\n");
-        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-                            "ip = %s\n", target_name);
+        strncpy(tmp_ip, target_name, MAX_CMD_LEN);
+        ip = strtok(tmp_ip, "/");
+        port = strtok(NULL, "/");
+        if (ip) {
+            cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                                "ip = %s\n", ip);
+        }
+        if (port) {
+            cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                                "udpport = %s\n", port);
+        }
         cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "}\n");
     }
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
