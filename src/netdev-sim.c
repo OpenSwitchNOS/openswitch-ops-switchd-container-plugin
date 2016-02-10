@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2010, 2011, 2012, 2013 Nicira, Inc.
- * Copyright (C) 2015, 2016 Hewlett-Packard Development Company, L.P.
+ * Copyright (C) 2015 Hewlett-Packard Development Company, L.P.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,6 @@
 
 #include "openvswitch/vlog.h"
 #include "netdev-sim.h"
-#include "ovs-atomic.h"
 
 #define SWNS_EXEC       "/sbin/ip netns exec swns"
 
@@ -288,13 +287,13 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 
 static int
 netdev_sim_set_etheraddr(struct netdev *netdev,
-                           const struct eth_addr mac)
+                           const uint8_t mac[ETH_ADDR_LEN])
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);
-    if (memcmp(dev->hwaddr, mac.ea, ETH_ADDR_LEN)) {
-        memcpy(dev->hwaddr, mac.ea, ETH_ADDR_LEN);
+    if (!eth_addr_equals(dev->hwaddr, mac)) {
+        memcpy(dev->hwaddr, mac, ETH_ADDR_LEN);
         netdev_change_seq_changed(netdev);
     }
     ovs_mutex_unlock(&dev->mutex);
@@ -304,12 +303,12 @@ netdev_sim_set_etheraddr(struct netdev *netdev,
 
 static int
 netdev_sim_get_etheraddr(const struct netdev *netdev,
-                           struct eth_addr *mac)
+                           uint8_t mac[ETH_ADDR_LEN])
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);
-    memcpy(mac->ea, dev->hwaddr, ETH_ADDR_LEN);
+    memcpy(mac, dev->hwaddr, ETH_ADDR_LEN);
     ovs_mutex_unlock(&dev->mutex);
 
     return 0;
