@@ -1,6 +1,6 @@
 /*
- * (c) Copyright 2015-2016 Hewlett Packard Enterprise Development LP
  * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2015-2016 Hewlett Packard Enterprise Development LP
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -256,12 +256,6 @@ static void
 query_tables(struct ofproto *ofproto,
              struct ofputil_table_features *features,
              struct ofputil_table_stats *stats)
-{
-    return;
-}
-
-static void
-set_tables_version(struct ofproto *ofproto, cls_version_t version)
 {
     return;
 }
@@ -1151,11 +1145,11 @@ rule_construct(struct rule *rule_ OVS_UNUSED)
     return 0;
 }
 
-static void rule_insert(struct rule *rule, struct rule *old_rule,
-                    bool forward_stats)
+static enum ofperr
+rule_insert(struct rule *rule_ OVS_UNUSED)
 OVS_REQUIRES(ofproto_mutex)
 {
-    return;
+    return 0;
 }
 
 static void
@@ -1180,7 +1174,7 @@ rule_get_stats(struct rule *rule_ OVS_UNUSED, uint64_t * packets OVS_UNUSED,
 
 static enum ofperr
 rule_execute(struct rule *rule OVS_UNUSED, const struct flow *flow OVS_UNUSED,
-             struct dp_packet *packet OVS_UNUSED)
+             struct ofpbuf *packet OVS_UNUSED)
 {
     return 0;
 }
@@ -1258,7 +1252,7 @@ set_frag_handling(struct ofproto *ofproto_ OVS_UNUSED,
 
 static enum ofperr
 packet_out(struct ofproto *ofproto_ OVS_UNUSED,
-           struct dp_packet *packet OVS_UNUSED,
+           struct ofpbuf *packet OVS_UNUSED,
            const struct flow *flow OVS_UNUSED,
            const struct ofpact *ofpacts OVS_UNUSED,
            size_t ofpacts_len OVS_UNUSED)
@@ -1314,7 +1308,6 @@ const struct ofproto_class ofproto_sim_provider_class = {
     NULL,                       /* may implement type_get_memory_usage */
     NULL,                       /* may implement flush */
     query_tables,
-    set_tables_version,
     port_alloc,
     port_construct,
     port_destruct,
@@ -1341,6 +1334,8 @@ const struct ofproto_class ofproto_sim_provider_class = {
     rule_dealloc,
     rule_get_stats,
     rule_execute,
+    NULL,                       /* rule_premodify_actions */
+    rule_modify_actions,
     set_frag_handling,
     packet_out,
     NULL,                       /* may implement set_netflow */
@@ -1350,13 +1345,6 @@ const struct ofproto_class ofproto_sim_provider_class = {
     NULL,                       /* may implement set_cfm */
     cfm_status_changed,
     NULL,                       /* may implement get_cfm_status */
-    NULL,                       /* may implement set_lldp */
-    NULL,                       /* may implement get_lldp_status */
-    NULL,                       /* may implement set_aa */
-    NULL,                       /* may implement aa_mapping_set */
-    NULL,                       /* may implement aa_mapping_unset */
-    NULL,                       /* may implement aa_vlan_get_queued */
-    NULL,                       /* may implement aa_vlan_get_queue_size */
     NULL,                       /* may implement set_bfd */
     bfd_status_changed,
     NULL,                       /* may implement get_bfd_status */
