@@ -31,6 +31,7 @@
 #include "unaligned.h"
 #include "vlan-bitmap.h"
 #include "openvswitch/vlog.h"
+#include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
 
@@ -1410,6 +1411,20 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
 }
 
 static void
+sflow_update_port(struct ofbundle *bundle)
+{
+    struct sim_provider_ofport *port = NULL, *next_port = NULL;
+
+    LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+        /* for sflow assume only one interface per port/bundle. */
+        netdev_update_sflow_reset(port->up.netdev);
+        break;
+    }
+
+
+}
+
+static void
 sflow_iptables_reconfigure(struct sim_provider_node *ofproto,
                            struct sim_sflow_cfg *sim_cfg)
 {
@@ -1424,6 +1439,7 @@ sflow_iptables_reconfigure(struct sim_provider_node *ofproto,
             if (!sset_contains(&sim_cfg->ports, bundle->name)) {
                 VLOG_DBG("adding sflow iptables rule for port = '%s'\n",
                          bundle->name);
+                sflow_update_port(bundle);
                 sflow_iptable_add(sim_cfg, bundle->name);
             }
         }
