@@ -68,6 +68,7 @@ struct ofbundle {
     bool is_vlan_routing_enabled;       /* If VLAN routing is enabled on this
                                          * bundle. */
     bool is_bridge_bundle;      /* If the bundle is internal for the bridge. */
+    bool is_sflow_enabled;      /* If slow is enabled for this bundle */
 };
 
 struct sim_provider_ofport {

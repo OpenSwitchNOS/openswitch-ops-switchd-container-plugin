@@ -689,6 +689,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         bundle->is_added_to_sim_ovs = false;
         bundle->is_vlan_routing_enabled = false;
         bundle->is_bridge_bundle = false;
+        bundle->is_sflow_enabled = true;
     }
 
     if (!bundle->name || strcmp(s->name, bundle->name)) {
@@ -730,6 +731,14 @@ found:     ;
     /* If it is bridge's internal bundle return from here. */
     if (bundle->is_bridge_bundle == true) {
         return 0;
+    }
+
+    /* Check if sflow is enabled in the port configuration */
+    if (smap_get_bool(s->port_options[PORT_OTHER_CONFIG],
+                      "sflow-enabled",true) == true) {
+        bundle->is_sflow_enabled = true;
+    } else {
+        bundle->is_sflow_enabled = false;
     }
 
     /* Check if the given bundle is a VLAN routing enabled. */
@@ -1330,33 +1339,33 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
     int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -I INPUT -i %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "%s iptables -I INPUT -i %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -I OUTPUT -o %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "%s iptables -I OUTPUT -o %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -I FORWARD -i %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "%s iptables -I FORWARD -i %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -I FORWARD -o %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "%s iptables -I FORWARD -o %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
@@ -1368,33 +1377,33 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
     int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -D INPUT -i %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "%s iptables -D INPUT -i %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -D OUTPUT -o %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "%s iptables -D OUTPUT -o %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -D FORWARD -i %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "%s iptables -D FORWARD -i %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "iptables -D FORWARD -o %s -m statistic --mode random --probability %0.3f -j ULOG "
+            "%s iptables -D FORWARD -o %s -m statistic --mode random --probability %0.3f -j ULOG "
             "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
@@ -1404,23 +1413,50 @@ static void
 sflow_iptables_reconfigure(struct sim_provider_node *ofproto,
                            struct sim_sflow_cfg *sim_cfg)
 {
-    const char *name;
-    /* check if new ports added under ofproto */
-    SSET_FOR_EACH(name, &ofproto->ports) {
-        VLOG_DBG("ofproto->ports : %s\n", name);
-        if (!sset_contains(&sim_cfg->ports, name)) {
-            sflow_iptable_add(sim_cfg, name);
+    struct ofbundle *bundle;
+    const char *port_name = NULL;
+    bool port_found = false;
+
+    /* Adding iptable rules for port by default if enabled on global level OR
+     * if sflow is explicitly enabled for the port in port configuration */
+    HMAP_FOR_EACH(bundle, hmap_node, &ofproto->bundles) {
+        if (bundle->is_sflow_enabled) {
+            if (!sset_contains(&sim_cfg->ports, bundle->name)) {
+                VLOG_DBG("adding sflow iptables rule for port = '%s'\n",
+                         bundle->name);
+                sflow_iptable_add(sim_cfg, bundle->name);
+            }
         }
     }
-    /* check if ports got deleted from ofproto */
-    SSET_FOR_EACH(name, &sim_cfg->ports) {
-        VLOG_DBG("sim_cfg->ports : %s\n", name);
-        if (!sset_contains(&ofproto->ports, name)) {
-            sflow_iptable_del(sim_cfg, name);
+
+    /* Deleting iptable rules for port if the new configuration doesn't have
+     * the port present in the current local configuration or if sflow is
+     * explicitly disabled in the port configuration */
+    SSET_FOR_EACH(port_name, &sim_cfg->ports) {
+        port_found = false;
+        HMAP_FOR_EACH(bundle, hmap_node, &ofproto->bundles) {
+            if (!strcmp(bundle->name, port_name)) {
+                port_found = true;
+                break;
+            }
+        }
+        if (!port_found || !bundle->is_sflow_enabled) {
+            VLOG_DBG("deleting sflow iptables rule for port = '%s'\n",
+                     port_name);
+            sflow_iptable_del(sim_cfg, port_name);
         }
     }
+
+    /* Destroying and readding only the ports for which sflow is enabled
+     * (by default or explicitly) to the local structure */
     sset_destroy(&sim_cfg->ports);
-    sset_clone(&sim_cfg->ports, &ofproto->ports);
+    sset_init(&sim_cfg->ports);
+
+    HMAP_FOR_EACH(bundle, hmap_node, &ofproto->bundles) {
+        if (bundle->is_sflow_enabled) {
+            sset_add(&sim_cfg->ports, bundle->name);
+        }
+    }
 }
 
 /* Configure openvswitch-sim's db with sflow configs */
