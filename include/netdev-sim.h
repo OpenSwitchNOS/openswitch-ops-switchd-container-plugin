@@ -27,5 +27,6 @@
 /* SIM provider API. */
 void netdev_sim_register(void);
 extern int netdev_sim_get_hw_id(struct netdev *netdev);
+void netdev_update_sflow_reset(struct netdev *netdev);
 
 #endif /* netdev-sim.h */
