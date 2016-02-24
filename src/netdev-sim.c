@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2010, 2011, 2012, 2013 Nicira, Inc.
- * Copyright (C) 2015 Hewlett-Packard Development Company, L.P.
+ * Copyright (C) 2015, 2016 Hewlett-Packard Development Company, L.P.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@
 #include <sys/socket.h>
 #include <net/ethernet.h>
 #include <linux/ethtool.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <net/if.h>
@@ -32,6 +34,7 @@
 
 #include "openvswitch/vlog.h"
 #include "netdev-sim.h"
+#include "ovs-atomic.h"
 
 #define SWNS_EXEC       "/sbin/ip netns exec swns"
 
@@ -69,6 +72,12 @@ struct netdev_sim {
 };
 
 static int netdev_sim_construct(struct netdev *);
+
+static void
+netdev_parse_netlink_msg(struct nlmsghdr *h, struct netdev_stats *stats);
+
+static int
+netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats);
 
 static bool
 is_sim_class(const struct netdev_class *class)
@@ -209,6 +218,29 @@ get_interface_pause_config(const char *pause_cfg, bool *pause_rx, bool *pause_tx
 }
 
 static int
+netdev_sim_set_config(struct netdev *netdev_, const struct smap *args)
+{
+
+    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
+    int   vlan = smap_get_int(args, "vlan", 0);
+    const char * parent = smap_get(args, "parent_intf_name");
+
+    ovs_mutex_lock(&netdev->mutex);
+    VLOG_DBG("vlan %d\n", vlan);
+    VLOG_DBG("parent_intf_name %s\n", parent ? parent : NULL );
+
+    if (0 != vlan) {
+        netdev->flags |= NETDEV_UP;
+    } else {
+        netdev->flags &= ~NETDEV_UP;
+    }
+
+    ovs_mutex_unlock(&netdev->mutex);
+    return 0;
+}
+
+
+static int
 netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 {
     char cmd[80];
@@ -264,13 +296,13 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 
 static int
 netdev_sim_set_etheraddr(struct netdev *netdev,
-                           const uint8_t mac[ETH_ADDR_LEN])
+                           const struct eth_addr mac)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);
-    if (!eth_addr_equals(dev->hwaddr, mac)) {
-        memcpy(dev->hwaddr, mac, ETH_ADDR_LEN);
+    if (memcmp(dev->hwaddr, mac.ea, ETH_ADDR_LEN)) {
+        memcpy(dev->hwaddr, mac.ea, ETH_ADDR_LEN);
         netdev_change_seq_changed(netdev);
     }
     ovs_mutex_unlock(&dev->mutex);
@@ -280,12 +312,12 @@ netdev_sim_set_etheraddr(struct netdev *netdev,
 
 static int
 netdev_sim_get_etheraddr(const struct netdev *netdev,
-                           uint8_t mac[ETH_ADDR_LEN])
+                           struct eth_addr *mac)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
 
     ovs_mutex_lock(&dev->mutex);
-    memcpy(mac, dev->hwaddr, ETH_ADDR_LEN);
+    memcpy(mac->ea, dev->hwaddr, ETH_ADDR_LEN);
     ovs_mutex_unlock(&dev->mutex);
 
     return 0;
@@ -295,7 +327,13 @@ static int
 netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
-
+    int rc = 0;
+    rc = netdev_get_kernel_stats(dev->linux_intf_name, &dev->stats);
+    if (rc < 0)
+    {
+        VLOG_ERR("Failed to get interface statistics for interface %s", dev->linux_intf_name);
+        return -1;
+    }
     ovs_mutex_lock(&dev->mutex);
     *stats = dev->stats;
     ovs_mutex_unlock(&dev->mutex);
@@ -525,9 +563,297 @@ static const struct netdev_class sim_internal_class = {
     NULL,                       /* rxq_wait */
     NULL,                       /* rxq_drain */
 };
+
+static const struct netdev_class sim_subinterface_class = {
+    "vlansubint",
+    NULL,                       /* init */
+    netdev_sim_run,
+    NULL,                       /* wait */
+
+    netdev_sim_alloc,
+    netdev_sim_construct,
+    netdev_sim_destruct,
+    netdev_sim_dealloc,
+    NULL,                       /* get_config */
+    netdev_sim_set_config,      /* set_config */
+    NULL,
+    NULL,
+    NULL,                       /* get_tunnel_config */
+    NULL,                       /* build header */
+    NULL,                       /* push header */
+    NULL,                       /* pop header */
+    NULL,                       /* get_numa_id */
+    NULL,                       /* set_multiq */
+
+    NULL,                       /* send */
+    NULL,                       /* send_wait */
+
+    netdev_sim_set_etheraddr,
+    netdev_sim_get_etheraddr,
+    NULL,                       /* get_mtu */
+    NULL,                       /* set_mtu */
+    NULL,                       /* get_ifindex */
+    netdev_sim_get_carrier,
+    NULL,                       /* get_carrier_resets */
+    NULL,                       /* get_miimon */
+    netdev_sim_get_stats,
+
+    netdev_sim_get_features,    /* get_features */
+    NULL,                       /* set_advertisements */
+
+    NULL,                       /* set_policing */
+    NULL,                       /* get_qos_types */
+    NULL,                       /* get_qos_capabilities */
+    NULL,                       /* get_qos */
+    NULL,                       /* set_qos */
+    NULL,                       /* get_queue */
+    NULL,                       /* set_queue */
+    NULL,                       /* delete_queue */
+    NULL,                       /* get_queue_stats */
+    NULL,                       /* queue_dump_start */
+    NULL,                       /* queue_dump_next */
+    NULL,                       /* queue_dump_done */
+    NULL,                       /* dump_queue_stats */
+
+    NULL,                       /* get_in4 */
+    NULL,                       /* set_in4 */
+    NULL,                       /* get_in6 */
+    NULL,                       /* add_router */
+    NULL,                       /* get_next_hop */
+    NULL,                       /* get_status */
+    NULL,                       /* arp_lookup */
+
+    netdev_sim_update_flags,
+
+    NULL,                       /* rxq_alloc */
+    NULL,                       /* rxq_construct */
+    NULL,                       /* rxq_destruct */
+    NULL,                       /* rxq_dealloc */
+    NULL,                       /* rxq_recv */
+    NULL,                       /* rxq_wait */
+    NULL,                       /* rxq_drain */
+};
+
+static const struct netdev_class sim_loopback_class = {
+    "loopback",
+    NULL,                       /* init */
+    netdev_sim_run,
+    NULL,                       /* wait */
+
+    netdev_sim_alloc,
+    netdev_sim_construct,
+    netdev_sim_destruct,
+    netdev_sim_dealloc,
+    NULL,                       /* get_config */
+    NULL,                       /* set_config */
+    NULL,
+    NULL,
+    NULL,                       /* get_tunnel_config */
+    NULL,                       /* build header */
+    NULL,                       /* push header */
+    NULL,                       /* pop header */
+    NULL,                       /* get_numa_id */
+    NULL,                       /* set_multiq */
+
+    NULL,                       /* send */
+    NULL,                       /* send_wait */
+
+    netdev_sim_set_etheraddr,
+    netdev_sim_get_etheraddr,
+    NULL,                       /* get_mtu */
+    NULL,                       /* set_mtu */
+    NULL,                       /* get_ifindex */
+    netdev_sim_get_carrier,
+    NULL,                       /* get_carrier_resets */
+    NULL,                       /* get_miimon */
+    netdev_sim_get_stats,
+
+    netdev_sim_get_features,    /* get_features */
+    NULL,                       /* set_advertisements */
+
+    NULL,                       /* set_policing */
+    NULL,                       /* get_qos_types */
+    NULL,                       /* get_qos_capabilities */
+    NULL,                       /* get_qos */
+    NULL,                       /* set_qos */
+    NULL,                       /* get_queue */
+    NULL,                       /* set_queue */
+    NULL,                       /* delete_queue */
+    NULL,                       /* get_queue_stats */
+    NULL,                       /* queue_dump_start */
+    NULL,                       /* queue_dump_next */
+    NULL,                       /* queue_dump_done */
+    NULL,                       /* dump_queue_stats */
+
+    NULL,                       /* get_in4 */
+    NULL,                       /* set_in4 */
+    NULL,                       /* get_in6 */
+    NULL,                       /* add_router */
+    NULL,                       /* get_next_hop */
+    NULL,                       /* get_status */
+    NULL,                       /* arp_lookup */
+
+    netdev_sim_update_flags,
+
+    NULL,                       /* rxq_alloc */
+    NULL,                       /* rxq_construct */
+    NULL,                       /* rxq_destruct */
+    NULL,                       /* rxq_dealloc */
+    NULL,                       /* rxq_recv */
+    NULL,                       /* rxq_wait */
+    NULL,                       /* rxq_drain */
+};
+
 void
 netdev_sim_register(void)
 {
     netdev_register_provider(&sim_class);
     netdev_register_provider(&sim_internal_class);
+    netdev_register_provider(&sim_subinterface_class);
+    netdev_register_provider(&sim_loopback_class);
+}
+
+static void
+netdev_parse_netlink_msg(struct nlmsghdr *h, struct netdev_stats *stats)
+{
+    struct ifinfomsg *iface;
+    struct rtattr *attribute;
+    struct rtnl_link_stats *s;
+    int len;
+
+    iface = NLMSG_DATA(h);
+    len = h->nlmsg_len - NLMSG_LENGTH(sizeof(*iface));
+    for (attribute = IFLA_RTA(iface); RTA_OK(attribute, len);
+         attribute = RTA_NEXT(attribute, len)) {
+        switch(attribute->rta_type) {
+        case IFLA_STATS:
+            s = (struct rtnl_link_stats *) RTA_DATA(attribute);
+            stats->rx_packets = s->rx_packets;
+            stats->tx_packets = s->tx_packets;
+            stats->rx_bytes = s->rx_bytes;
+            stats->tx_bytes = s->tx_bytes;
+            stats->rx_errors = s->rx_errors;
+            stats->tx_errors = s->tx_errors;
+            stats->rx_dropped = s->rx_dropped;
+            stats->tx_dropped = s->tx_dropped;
+            stats->multicast = s->multicast;
+            stats->collisions = s->collisions;
+            stats->rx_crc_errors = s->rx_crc_errors;
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+static int
+netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats)
+{
+    int sock;
+    struct sockaddr_nl s_addr;
+    struct {
+        struct nlmsghdr hdr;
+        struct ifinfomsg iface;
+    } req;
+    struct sockaddr_nl kernel;
+    struct msghdr rtnl_msg;
+    struct iovec io;
+
+    memset (&req, 0, sizeof(req));
+    memset (&kernel, 0, sizeof(kernel));
+    memset (&rtnl_msg, 0, sizeof(rtnl_msg));
+    kernel.nl_family = AF_NETLINK;
+
+    req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+    req.hdr.nlmsg_flags = NLM_F_REQUEST;
+    req.hdr.nlmsg_type = RTM_GETLINK;
+
+    req.iface.ifi_family = AF_UNSPEC;
+    req.iface.ifi_type = IFLA_UNSPEC;
+    req.iface.ifi_flags = 0;
+    req.iface.ifi_change = 0xffffffff;
+    req.iface.ifi_index = if_nametoindex(if_name);
+
+    sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+
+    if (sock < 0) {
+        VLOG_ERR("Netlink socket creation failed during netlink \
+                request for statistics (%s)",strerror(errno));
+        return -1;
+    }
+
+    memset((void *) &s_addr, 0, sizeof(s_addr));
+    s_addr.nl_family = AF_NETLINK;
+    s_addr.nl_pid = getpid();
+    s_addr.nl_groups = 0;
+
+    if (bind(sock, (struct sockaddr *) &s_addr, sizeof(s_addr)) < 0) {
+        VLOG_ERR("Socket bind failed during netlink \
+                request for statistics");
+        close(sock);
+        return -1;
+    }
+
+    io.iov_base = &req;
+    io.iov_len = req.hdr.nlmsg_len;
+    rtnl_msg.msg_name = &kernel;
+    rtnl_msg.msg_namelen = sizeof(kernel);
+    rtnl_msg.msg_iov = &io;
+    rtnl_msg.msg_iovlen = 1;
+
+    sendmsg(sock, (struct msghdr *) &rtnl_msg, 0);
+
+    /* Prepare for reply from the kernel */
+    bool multipart_msg_end = false;
+
+    while (!multipart_msg_end) {
+        struct sockaddr_nl nladdr;
+        struct msghdr msg;
+        struct iovec iov;
+        struct nlmsghdr *nlh;
+        char buffer[4096];
+        int ret;
+
+        iov.iov_base = (void *)buffer;
+        iov.iov_len = sizeof(buffer);
+        msg.msg_name = (void *)&(nladdr);
+        msg.msg_namelen = sizeof(nladdr);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+
+        ret = recvmsg(sock, &msg, 0);
+
+        if (ret < 0) {
+            VLOG_ERR("Reply error during netlink \
+                     request for statistics\n");
+            close(sock);
+            return -1;
+        }
+
+        nlh = (struct nlmsghdr*) buffer;
+
+        for (nlh = (struct nlmsghdr *) buffer;
+             NLMSG_OK(nlh, ret);
+             nlh = NLMSG_NEXT(nlh, ret)) {
+            switch(nlh->nlmsg_type) {
+            case RTM_NEWLINK:
+                netdev_parse_netlink_msg(nlh, stats);
+                break;
+
+            case NLMSG_DONE:
+                multipart_msg_end = true;
+                break;
+
+            default:
+                break;
+            }
+
+            if (!(nlh->nlmsg_flags & NLM_F_MULTI)) {
+                multipart_msg_end = true;
+            }
+        }
+    }
+    close(sock);
+
+    return 0;
 }

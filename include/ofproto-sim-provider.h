@@ -1,6 +1,6 @@
 
 /*
- * (c) Copyright 2015 Hewlett Packard Enterprise Development LP
+ * (c) Copyright 2015-2016 Hewlett Packard Enterprise Development LP
  * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +25,8 @@
 #define MAX_CLI                 1024
 #define OVS_VSCTL               "/opt/openvswitch/bin/ovs-vsctl"
 #define ASIC_OVSDB_PATH         "/var/run/openvswitch-sim/ovsdb.db"
+#define APPCTL                  "/opt/openvswitch/bin/ovs-appctl"
+#define OVS_SIM                 "ovs-vswitchd-sim"
 
 struct sim_provider_rule {
     struct rule up;
