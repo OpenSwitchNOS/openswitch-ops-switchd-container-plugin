@@ -20,6 +20,9 @@
 #include "ofproto/ofproto-provider.h"
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
+#include "qos.h"
+#include "plugin-extensions.h"
+#include "asic-plugin.h"
 
 #define init libovs_sim_plugin_LTX_init
 #define run libovs_sim_plugin_LTX_run
@@ -32,9 +35,25 @@
 
 VLOG_DEFINE_THIS_MODULE(sim_plugin);
 
+struct asic_plugin_interface container_interface ={
+    /* The new functions that need to be exported, can be declared here*/
+    .set_port_qos_cfg = &set_port_qos_cfg,
+    .set_cos_map = &set_cos_map,
+    .set_dscp_map = &set_dscp_map,
+};
+
 void
 init(void)
 {
+    struct plugin_extension_interface container_extension;
+    container_extension.plugin_name = ASIC_PLUGIN_INTERFACE_NAME;
+    container_extension.major = ASIC_PLUGIN_INTERFACE_MAJOR;
+    container_extension.minor = ASIC_PLUGIN_INTERFACE_MINOR;
+    container_extension.plugin_interface = (void *)&container_interface;
+
+    register_plugin_extension(&container_extension);
+    VLOG_INFO("The %s asic plugin interface was registered", ASIC_PLUGIN_INTERFACE_NAME);
+
     char cmd_str[MAX_CMD_LEN];
     memset(cmd_str, 0, sizeof(cmd_str));
     /* Cleaning up the Internal "ASIC" OVS everytime ops-switchd daemon is
