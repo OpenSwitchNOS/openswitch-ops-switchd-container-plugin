@@ -529,7 +529,6 @@ bundle_configure(struct ofbundle *bundle)
     char cmd_str[MAX_CMD_LEN];
     int i = 0, n = 0, n_ports = 0;
     uint32_t vlan_count = 0;
-    char port_name[IFNAMSIZ];
 
     /* If this bundle is already added in the ASIC simulator OVS then delete
      * it. We are going to re-create it with new config again. */
@@ -551,30 +550,28 @@ bundle_configure(struct ofbundle *bundle)
 
     n_ports = list_size(&bundle->ports);
 
-    /* If there is only one slave, then it should be a regular port not a
-     * bundle. */
-    if (n_ports == 1) {
-        n = snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-port %s ",
-                     OVS_VSCTL, ofproto->up.name);
-    } else if (n_ports > 1) {
-        n = snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-bond %s %s",
+    /* If there is one or more slaves, then create a regular port. The Linux
+     * bonding driver will take care of managing the bond if the number of
+     * slaves is greater than 1. */
+    if (n_ports >= 1) {
+        /* If there is more than one slave, then we need to delete the
+         * existent ports that are part of the bond, otherwise the bonding
+         * driver does not work properly */
+        if (n_ports > 1) {
+            LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+                snprintf(cmd_str, MAX_CMD_LEN, "%s del-port %s", OVS_VSCTL,
+                         netdev_get_name(port->up.netdev));
+                if (system(cmd_str) != 0) {
+                    VLOG_DBG("Failed to delete port. cmd=%s, rc=%s",
+                             cmd_str, strerror(errno));
+                }
+            }
+        }
+        n = snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-port %s %s",
                      OVS_VSCTL, ofproto->up.name, bundle->name);
     } else {
         VLOG_INFO("Not enough ports to create a bundle, so skipping it.");
-    }
-
-    LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
-
-        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " %s",
-                      netdev_get_name(port->up.netdev));
-        ovs_assert(n <= MAX_CMD_LEN);
-    }
-
-    /* Always configure bond_mode as active-backup, balance-slb is not supported */
-    /* for two upstream switches using lag*/
-    if (n_ports > 1) {
-        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " bond_mode=active-backup");
-        ovs_assert(n <= MAX_CMD_LEN);
+        return;
     }
 
     if (bundle->vlan_mode != PORT_VLAN_TRUNK) {
@@ -589,7 +586,7 @@ bundle_configure(struct ofbundle *bundle)
     }
 
     /* The following logic is used for a port/bond in trunk mode:
-     * If the configuration didn’t list any trunk VLAN, trunk all VLANs that
+     * If the configuration didn't list any trunk VLAN, trunk all VLANs that
      * are enabled in the VLAN table (bit set in VLAN bitmap).
      * If the configuration does list trunk VLANs, configure all of the VLANs
      * in that list which are also enabled in the VLAN table.
@@ -646,33 +643,6 @@ bundle_configure(struct ofbundle *bundle)
         VLOG_ERR("Failed to create bundle. %s, %s", cmd_str, strerror(errno));
     } else {
         bundle->is_added_to_sim_ovs = true;
-
-        /* In order to LAG to work using active-backup we need to choose the active slave,
-         * to do this we choose the smaller port alphabetically always*/
-
-        if (n_ports > 1) {
-
-            INIT_CONTAINER(port, (&bundle->ports)->next, bundle_node);
-            strncpy(port_name, netdev_get_name(port->up.netdev), IFNAMSIZ);
-
-            LIST_FOR_EACH_SAFE(port, next_port, bundle_node, (&bundle->ports)) {
-                if(strncmp(port_name, netdev_get_name(port->up.netdev), IFNAMSIZ) > 0){
-                    strncpy(port_name, netdev_get_name(port->up.netdev), IFNAMSIZ);
-                }
-            }
-
-            /* Make sure this command is executed */
-            n = snprintf(&cmd_str[0], (MAX_CMD_LEN),
-                          "%s --target=%s bond/set-active-slave %s %s"
-                          , APPCTL, OVS_SIM, bundle->name, port_name);
-
-            VLOG_INFO("bond %s: %s", bundle->name, cmd_str);
-            ovs_assert(n <= MAX_CMD_LEN);
-
-            while (system(cmd_str) != 0) {
-                VLOG_ERR("Failed to set active slave, trying again. %s, %s",cmd_str,strerror(errno));
-            }
-        }
     }
 
 done:
