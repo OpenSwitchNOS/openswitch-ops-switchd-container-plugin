@@ -116,6 +116,9 @@ struct sim_sflow_cfg {
     struct sset ports; /* port names where sflow config is applied (for VRF) */
     struct sset targets;
     uint32_t sampling_rate;
+    uint32_t polling_interval;
+    uint32_t header_len;
+    uint32_t max_datagram;
     char *agent_device;
     bool set;
 };

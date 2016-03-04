@@ -1353,6 +1353,9 @@ sflow_cfg_equal(struct ofproto_sflow_options *ofproto_cfg,
 {
     return (sset_equals(&ofproto_cfg->targets, &sim_cfg->targets)
             && (ofproto_cfg->sampling_rate == sim_cfg->sampling_rate)
+            && (ofproto_cfg->polling_interval == sim_cfg->polling_interval)
+            && (ofproto_cfg->header_len == sim_cfg->header_len)
+            && (ofproto_cfg->max_datagram == sim_cfg->max_datagram)
             && (string_is_equal(ofproto_cfg->agent_device,
                                 sim_cfg->agent_device)));
 }
@@ -1365,6 +1368,9 @@ sflow_cfg_set(struct ofproto_sflow_options *ofproto_cfg,
         return;
     }
     sim_cfg->sampling_rate = ofproto_cfg->sampling_rate;
+    sim_cfg->polling_interval = ofproto_cfg->polling_interval;
+    sim_cfg->header_len = ofproto_cfg->header_len;
+    sim_cfg->max_datagram = ofproto_cfg->max_datagram;
     sset_init(&sim_cfg->ports);
     sset_clone(&sim_cfg->targets, &ofproto_cfg->targets);
     sim_cfg->agent_device = ofproto_cfg->agent_device ?
@@ -1461,7 +1467,6 @@ sflow_update_port(struct ofbundle *bundle)
         break;
     }
 
-
 }
 
 static void
@@ -1551,9 +1556,12 @@ sflow_ovs_configure(struct sim_provider_node *ofproto,
         cmd_len--; /* to remove the last , */
     }
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-                        " header=%d sampling=%d -- set bridge %s sflow=@sflow",
+                        " header=%d sampling=%d polling=%d "
+                        "-- set bridge %s sflow=@sflow",
                         ofproto_cfg->header_len,
-                        ofproto_cfg->sampling_rate, ofproto->up.name);
+                        ofproto_cfg->sampling_rate,
+                        ofproto_cfg->polling_interval,
+                        ofproto->up.name);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to set sflow on bridge '%s'. cmd='%s', rc=%s",
                  ofproto->up.name, cmd_str, strerror(errno));
@@ -1585,6 +1593,12 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "DNSSD = off\n");
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
                         "sampling = %d\n", ofproto_cfg->sampling_rate);
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        "polling = %d\n", ofproto_cfg->polling_interval);
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        "headerBytes = %d\n", ofproto_cfg->header_len);
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        "datagramBytes = %d\n", ofproto_cfg->max_datagram);
     SSET_FOR_EACH(target_name, &ofproto_cfg->targets) {
         cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
                             "collector {\n");
