@@ -177,6 +177,17 @@ netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
         VLOG_ERR("Invalid mac address %s", mac_addr);
     }
 
+    /* Check if the interface exists. Else create a tap interface */
+    sprintf(cmd, "%s /sbin/ip link show %s",
+            SWNS_EXEC, netdev->linux_intf_name);
+    if (system(cmd) != 0) {
+        VLOG_DBG("Creating interface %s\n", netdev->linux_intf_name);
+        sprintf(cmd, "%s /sbin/ip tuntap add dev %s mode tap", SWNS_EXEC, netdev->linux_intf_name);
+        if (system(cmd) != 0) {
+            VLOG_ERR("NETDEV-SIM | system command failure cmd = %s\n", cmd);
+        }
+    }
+
     sprintf(cmd, "%s /sbin/ip link set dev %s down",
             SWNS_EXEC, netdev->linux_intf_name);
     if (system(cmd) != 0) {
