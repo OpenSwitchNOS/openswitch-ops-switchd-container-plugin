@@ -23,6 +23,8 @@
 #include "config.h"
 #include "ofproto/ofproto-provider.h"
 #include "ofproto/bond.h"
+#include "plugin-extensions.h"
+#include "qos-asic-provider.h"
 #include "ofproto/tunnel.h"
 #include "bundle.h"
 #include "coverage.h"
@@ -38,6 +40,11 @@
 #include "eventlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
+
+
+
+static struct plugin_extension_interface qos_extension;
+
 
 static struct sim_provider_ofport *
 sim_provider_ofport_cast(const struct ofport *ofport)
@@ -1748,6 +1755,109 @@ set_sflow(struct ofproto *ofproto_,
 
     }
     return 0;
+}
+
+/* QOS. */
+int
+set_port_qos_cfg(struct ofproto *ofproto_,
+                 void *aux,  // struct port *port
+                 const struct  qos_port_settings *cfg) {
+    const struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+
+    struct ofbundle *bundle = bundle_lookup(ofproto, aux);
+    if (bundle)
+    {
+        VLOG_DBG("%s: port %s, settings->qos_trust %d, cfg@ %p",
+                 __FUNCTION__, bundle->name, cfg->qos_trust, cfg->other_config);
+    }
+    else
+    {
+        VLOG_DBG("%s: NO BUNDLE aux@%p, settings->qos_trust %d, cfg@ %p",
+                 __FUNCTION__, aux, cfg->qos_trust, cfg->other_config);
+    }
+
+    return 0;
+}
+
+int
+set_cos_map(struct ofproto *ofproto,
+            void *aux,
+            const struct cos_map_settings *settings) {
+    int   index;
+    struct cos_map_entry *entry;
+
+    for (index = 0; index < settings->n_entries; index++) {
+        entry = &settings->entries[index];
+        VLOG_DBG("%s: ofproto@ %p index=%d color=%d cp=%d lp=%d",
+                 __FUNCTION__, ofproto, index,
+                 entry->color, entry->codepoint, entry->local_priority);
+    }
+
+    return 0;
+}
+
+int
+set_dscp_map(struct ofproto *ofproto,
+             void *aux,
+             const struct dscp_map_settings *settings) {
+    int   index;
+    struct dscp_map_entry *entry;
+
+    for (index = 0; index < settings->n_entries; index++) {
+        entry = &settings->entries[index];
+        VLOG_DBG("%s: ofproto@ %p index=%d color=%d cp=%d lp=%d cos=%d",
+                 __FUNCTION__, ofproto, index,
+                 entry->color, entry->codepoint, entry->local_priority, entry->cos);
+    }
+
+    return 0;
+}
+
+int
+apply_qos_profile(struct ofproto *ofproto,
+                  void *aux,
+                  const struct schedule_profile_settings *s_settings,
+                  const struct queue_profile_settings *q_settings) {
+    int index;
+    struct queue_profile_entry *qp_entry;
+    struct schedule_profile_entry *sp_entry;
+
+    VLOG_DBG("%s ofproto@ %p aux=%p q_settings=%p s_settings=%p", __FUNCTION__,
+             aux, ofproto, s_settings, q_settings);
+
+    for (index = 0; index < q_settings->n_entries; index++) {
+        qp_entry = q_settings->entries[index];
+        VLOG_DBG("... %d q=%d #lp=%d", index,
+                 qp_entry->queue, qp_entry->n_local_priorities);
+    }
+
+    for (index = 0; index < s_settings->n_entries; index++) {
+        sp_entry = s_settings->entries[index];
+        VLOG_DBG("... %d q=%d alg=%d wt=%d", index,
+                 sp_entry->queue, sp_entry->algorithm, sp_entry->weight);
+    }
+
+    return 0;
+}
+
+static struct qos_asic_plugin_interface qos_asic_plugin = {
+    set_port_qos_cfg,
+    set_cos_map,
+    set_dscp_map,
+    apply_qos_profile
+};
+
+static struct plugin_extension_interface qos_extension = {
+    QOS_ASIC_PLUGIN_INTERFACE_NAME,
+    QOS_ASIC_PLUGIN_INTERFACE_MAJOR,
+    QOS_ASIC_PLUGIN_INTERFACE_MINOR,
+    (void *)&qos_asic_plugin
+};
+
+int
+register_qos_extension(void)
+{
+    return(register_plugin_extension(&qos_extension));
 }
 
 #if 0
