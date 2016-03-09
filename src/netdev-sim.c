@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2010, 2011, 2012, 2013 Nicira, Inc.
- * Copyright (C) 2015, 2016 Hewlett-Packard Development Company, L.P.
+ * Copyright (c) 2015-2016 Hewlett Packard Enterprise Development LP
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,9 @@
  */
 
 #include <config.h>
+
+#include "netdev-sim.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -30,11 +33,10 @@
 #include <netinet/in.h>
 #include <net/if.h>
 
-#include <openswitch-idl.h>
-
+#include "openswitch-idl.h"
 #include "openvswitch/vlog.h"
-#include "netdev-sim.h"
 #include "ovs-atomic.h"
+#include "switchd-qos.h"
 
 VLOG_DEFINE_THIS_MODULE(netdev_sim);
 
@@ -415,6 +417,46 @@ netdev_sim_update_sflow_stats(struct netdev_sim *netdev)
     ovs_mutex_unlock(&netdev->mutex);
 }
 
+int
+netdev_sim_dump_queue_stats(const struct netdev* netdev,
+                            netdev_dump_queue_stats_cb* cb,
+                            void* aux)
+{
+    /* static struct that mimics stateful hardware stats data */
+    static struct netdev_queue_stats lstats[NUM_QUEUES];
+
+    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    int q = 0;
+
+    ovs_mutex_lock(&dev->mutex);
+
+    for (q=0; q<NUM_QUEUES; q++) {
+
+        /* fake queue stats increase */
+        if (lstats[q].tx_bytes == 0)
+            lstats[q].tx_bytes = q+1;
+        else
+            lstats[q].tx_bytes += 10;
+
+        if (lstats[q].tx_packets == 0)
+            lstats[q].tx_packets = q+1;
+        else
+            lstats[q].tx_packets += 10;
+
+        if (lstats[q].tx_errors == 0)
+            lstats[q].tx_errors = q+1;
+        else
+            lstats[q].tx_errors += 10;
+
+        /* punt our PI qstats array on through aux */
+        (*cb)(q, &lstats[q], aux);
+    }
+
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
 static int
 netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
 {
@@ -568,7 +610,7 @@ static const struct netdev_class sim_class = {
     NULL,                       /* queue_dump_start */
     NULL,                       /* queue_dump_next */
     NULL,                       /* queue_dump_done */
-    NULL,                       /* dump_queue_stats */
+    netdev_sim_dump_queue_stats,/* dump_queue_stats */
 
     NULL,                       /* get_in4 */
     NULL,                       /* set_in4 */
@@ -638,7 +680,7 @@ static const struct netdev_class sim_internal_class = {
     NULL,                       /* queue_dump_start */
     NULL,                       /* queue_dump_next */
     NULL,                       /* queue_dump_done */
-    NULL,                       /* dump_queue_stats */
+    netdev_sim_dump_queue_stats,/* dump_queue_stats */
 
     NULL,                       /* get_in4 */
     NULL,                       /* set_in4 */
