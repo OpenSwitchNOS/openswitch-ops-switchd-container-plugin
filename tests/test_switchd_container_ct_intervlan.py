@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# (c) Copyright 2015 Hewlett Packard Enterprise Development LP
+# (c) Copyright 2015-2016 Hewlett Packard Enterprise Development LP
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -32,15 +32,13 @@ class simIntervlanTests( OpsVsiTest ):
   def intervlan_direct_connected(self):
     info("########## Verify intervlan for directly",
          "connected hosts ##########\n")
-    # configuring OpenSwitch, in the future it would be through
-    # proper OpenSwitch commands
     s1 = self.net.switches[ 0 ]
     h1 = self.net.hosts[ 0 ]
     h2 = self.net.hosts[ 1 ]
     # Configure switch s1
     s1.cmdCLI("configure terminal")
 
-    # Configure VLANS 100 and 200 on siwtch
+    # Configure VLANs 100 and 200 on switch
     s1.cmdCLI("vlan 100")
     s1.cmdCLI("no shutdown")
     s1.cmdCLI("exit")
@@ -89,12 +87,6 @@ class simIntervlanTests( OpsVsiTest ):
            "Trunk vlan 100 on bridge_normal wasnt configured"
 
     info("\n### vlan interface configuration: Success ###\n")
-
-    # Bring interface 1 up
-    s1.ovscmd("/usr/bin/ovs-vsctl set interface 1 user_config:admin=up")
-
-    # Bring interface 2 up
-    s1.ovscmd("/usr/bin/ovs-vsctl set interface 2 user_config:admin=up")
 
     # Configure host 1
     info("Configuring host 1 with 100.0.0.2/24\n")
@@ -158,8 +150,42 @@ class simIntervlanTests( OpsVsiTest ):
     info("Delete vlan interface Success\n")
 
 
-    info("########## inter-vlan test for directly",
-         "connected hosts passed ##########\n")
+    info("\n########## Inter-vlan test for directly",
+         "connected hosts passed ##########\n\n")
+
+  def intervlan_admin_and_link_states(self):
+    info("\n########## Verify interface VLAN admin and link states ",
+         "##########\n")
+    '''
+    This function verifies if the admin and the link state for the interface
+    VLANs are "up" after "no shut" and "down" after "shutdown". This helps
+    zebra in selecting the interface VLAN as a nexthop for forwarding.
+    '''
+    s1 = self.net.switches[ 0 ]
+    h1 = self.net.hosts[ 0 ]
+    h2 = self.net.hosts[ 1 ]
+
+    # Configuring VLAN interfaces and bringing them up
+    info("### Bringing the interface VLAN up ###\n")
+    s1.cmdCLI("interface vlan 100")
+    s1.cmdCLI("no shutdown")
+    time.sleep(1)
+    admin_state, link_state = s1.ovscmd("ovs-vsctl get interface vlan100 "
+            "admin_state link_state").splitlines()
+    assert "up" in admin_state and "up" in link_state, \
+            "Admin and Link State Verification Unsuccessful\n\n"
+
+    # Configuring VLAN interfaces and bringing them up
+    info("### Bringing the interface VLAN down ###\n")
+    s1.cmdCLI("shutdown")
+    time.sleep(1)
+    admin_state, link_state = s1.ovscmd("ovs-vsctl get interface vlan100 "
+            "admin_state link_state").splitlines()
+    assert "down" in admin_state and "down" in link_state, \
+            "Admin and Link State Verification Unsuccessful\n\n"
+
+    info("\n########## Interface VLAN test for admin",
+         "and link states passed ##########\n\n")
 
 class Test_switchd_container_intervlan:
 
@@ -169,6 +195,10 @@ class Test_switchd_container_intervlan:
   # Test for slow routing between directly connected hosts
   def test_switchd_container_intervlan_direct_connected(self):
     self.test.intervlan_direct_connected()
+
+  # Test to verify the admin and the link states for interface VLANs
+  def test_switchd_container_intervlan_admin_and_link_states(self):
+    self.test.intervlan_admin_and_link_states()
 
   def teardown_class(cls):
     Test_switchd_container_intervlan.test.net.stop()
