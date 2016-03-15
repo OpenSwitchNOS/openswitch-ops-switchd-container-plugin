@@ -1287,7 +1287,7 @@ sflow_disable(struct sim_provider_node *ofproto,
     if (ofproto->vrf) {
         sflow_iptable_del_all();
         /* stop host sflow agent */
-        if ((system("/etc/init.d/hsflowd stop")) != 0) {
+        if ((system("systemctl stop host-sflow")) != 0) {
             VLOG_ERR("Failed to stop host sflow agent, rc=%s", strerror(errno));
         }
     } else {
@@ -1596,7 +1596,7 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     fclose(fp);
 
     /* restart host sflow agent */
-    if ((system("/etc/init.d/hsflowd restart")) != 0) {
+    if ((system("systemctl restart host-sflow")) != 0) {
         VLOG_ERR("Failed to restart host sflow agent, rc=%s", strerror(errno));
         return;
     }
