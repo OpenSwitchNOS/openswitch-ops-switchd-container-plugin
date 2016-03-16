@@ -17,7 +17,7 @@
 #ifndef __OPS_CLASSIFIER_H_SIM__
 #define __OPS_CLASSIFIER_H_SIM__ 1
 
-#include "vswitchd/plugins/ops-classifier/include/ofproto-ops-classifier.h"
+#include "ofproto-ops-classifier.h"
 #include "ovs/unixctl.h"
 
 /************************************************************************//**
