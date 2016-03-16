@@ -71,6 +71,13 @@ struct netdev_sim {
     bool pause_rx;
 };
 
+struct kernel_l3_stats {
+    uint64_t uc_packets;
+    uint64_t uc_bytes;
+    uint64_t mc_packets;
+    uint64_t mc_bytes;
+};
+
 static int netdev_sim_construct(struct netdev *);
 
 static void
@@ -78,6 +85,9 @@ netdev_parse_netlink_msg(struct nlmsghdr *h, struct netdev_stats *stats);
 
 static int
 netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats);
+
+static int
+netdev_sim_get_kernel_l3_stats(const char *if_name, struct netdev_stats *stats);
 
 static bool
 is_sim_class(const struct netdev_class *class)
@@ -332,6 +342,12 @@ netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
     if (rc < 0)
     {
         VLOG_ERR("Failed to get interface statistics for interface %s", dev->linux_intf_name);
+        return -1;
+    }
+    rc = netdev_sim_get_kernel_l3_stats(dev->linux_intf_name, &dev->stats);
+    if (rc < 0)
+    {
+        VLOG_ERR("Failed to get L3 interface statistics for interface %s", dev->linux_intf_name);
         return -1;
     }
     ovs_mutex_lock(&dev->mutex);
@@ -713,6 +729,174 @@ netdev_sim_register(void)
     netdev_register_provider(&sim_loopback_class);
 }
 
+static bool
+netdev_sim_l3stats_xtables_rule_installed(const char *if_name,
+        const char *xtables_cmd, const char *chain, const char * pkttype)
+{
+    char cmd[256];
+    int rc = 0;
+    if(!strcmp(chain, "FORWARD"))
+    {
+        snprintf(cmd, sizeof(cmd), "%s %s -C %s -i %s -m pkttype --pkt-type %s",
+                SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+        rc = system(cmd);
+        if (rc != 0) {
+            return false;
+        }
+        snprintf(cmd, sizeof(cmd), "%s %s -C %s -o %s -m pkttype --pkt-type %s",
+                SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+        rc = system(cmd);
+        if (rc != 0) {
+            return false;
+        }
+        return true;
+    }
+
+    char filter = !strcmp(chain, "INPUT") ? 'i' : 'o';
+    snprintf(cmd, sizeof(cmd), "%s %s -C %s -%c %s -m pkttype --pkt-type %s",
+            SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
+    rc = system(cmd);
+    if (rc != 0) {
+        return false;
+    }
+    return true;
+}
+
+static int
+netdev_sim_l3stats_add_rule(const char *if_name, const char *xtables_cmd,
+        const char *chain, const char *pkttype)
+{
+    char cmd[256];
+    int rc = 0;
+
+    if(!strcmp(chain, "FORWARD"))
+    {
+        if(!netdev_sim_l3stats_xtables_rule_installed(if_name, xtables_cmd, chain, pkttype))
+        {
+            snprintf(cmd, sizeof(cmd), "%s %s -A %s -i %s -m pkttype --pkt-type %s",
+                    SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+            rc = system(cmd);
+            if (rc != 0) {
+                VLOG_ERR("Failed to execute - %s (rc=%d)", cmd, rc);
+                return 1;
+            }
+            snprintf(cmd, sizeof(cmd), "%s %s -A %s -o %s -m pkttype --pkt-type %s",
+                    SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+            rc = system(cmd);
+            if (rc != 0) {
+                VLOG_ERR("Failed to execute - %s (rc=%d)", cmd, rc);
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    char filter = !strcmp(chain, "INPUT") ? 'i' : 'o';
+
+    /* Add rule if it does not exist */
+    if(!netdev_sim_l3stats_xtables_rule_installed(if_name, xtables_cmd, chain, pkttype))
+    {
+        snprintf(cmd, sizeof(cmd), "%s %s -A %s -%c %s -m pkttype --pkt-type %s",
+                SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
+        rc = system(cmd);
+        if (rc != 0) {
+            VLOG_ERR("Failed to execute - %s (rc=%d)", cmd, rc);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int
+netdev_sim_l3stats_delete_rule(const char *if_name, const char *xtables_cmd,
+        const char *chain, const char *pkttype)
+{
+    char cmd[256];
+    int rc = 0;
+
+    if(!strcmp(chain, "FORWARD"))
+    {
+        if(netdev_sim_l3stats_xtables_rule_installed(if_name, xtables_cmd, chain, pkttype))
+        {
+            snprintf(cmd, sizeof(cmd), "%s %s -D %s -i %s -m pkttype --pkt-type %s",
+                    SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+            rc = system(cmd);
+            if (rc != 0) {
+                VLOG_ERR("Failed to execute - %s (rc=%d)", cmd, rc);
+                return 1;
+            }
+            snprintf(cmd, sizeof(cmd), "%s %s -D %s -o %s -m pkttype --pkt-type %s",
+                    SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+            rc = system(cmd);
+            if (rc != 0) {
+                VLOG_ERR("Failed to execute - %s (rc=%d)", cmd, rc);
+                return 1;
+            }
+        }
+        return 0;
+    }
+    char filter = !strcmp(chain, "INPUT") ? 'i' : 'o';
+
+    /* Delete rule if it exists */
+    if(netdev_sim_l3stats_xtables_rule_installed(if_name, xtables_cmd, chain, pkttype))
+    {
+        snprintf(cmd, sizeof(cmd), "%s %s -D %s -%c %s -m pkttype --pkt-type %s",
+                SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
+        rc = system(cmd);
+        if (rc != 0) {
+            VLOG_ERR("Failed to execute - %s (rc=%d)", cmd, rc);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int
+netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
+{
+    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    int rc = 0;
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "multicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "INPUT", "unicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "INPUT", "multicast");
+
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "OUTPUT", "unicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "OUTPUT", "multicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "OUTPUT", "unicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "OUTPUT", "multicast");
+
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "FORWARD", "unicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "FORWARD", "multicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "unicast");
+    rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
+
+    return rc;
+}
+
+int
+netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
+{
+    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    int rc = 0;
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "INPUT", "multicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "INPUT", "unicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "INPUT", "multicast");
+
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "OUTPUT", "unicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "OUTPUT", "multicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "OUTPUT", "unicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "OUTPUT", "multicast");
+
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "FORWARD", "unicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "FORWARD", "multicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "unicast");
+    rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
+
+    return rc;
+}
+
 static void
 netdev_parse_netlink_msg(struct nlmsghdr *h, struct netdev_stats *stats)
 {
@@ -856,4 +1040,182 @@ netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats)
     close(sock);
 
     return 0;
+}
+
+static int
+netdev_sim_get_kernel_l3_stats_util(const char *if_name,
+        struct kernel_l3_stats *kernel_stats,
+        const char *xtables_cmd,
+        const char *chain)
+{
+    FILE *fp;
+    char path[1035];
+    char cmd[256];
+    uint64_t packets = 0;
+    uint64_t bytes = 0;
+
+    if(!strcmp(chain, "INPUT"))
+    {
+        /* Get L3 RX stats */
+        snprintf(cmd, sizeof(cmd), "%s %s -L INPUT -vx | awk '$5 == \"%s\" {print $1,$2}'",
+                 SWNS_EXEC, xtables_cmd, if_name);
+    }
+    else
+    {
+        /* Get L3 TX stats */
+        snprintf(cmd, sizeof(cmd), "%s %s -L OUTPUT -vx | awk '$6 == \"%s\" {print $1,$2}'",
+                 SWNS_EXEC, xtables_cmd, if_name);
+    }
+
+    /* Open the command for reading. */
+    fp = popen(cmd, "r");
+    if (fp == NULL) {
+        VLOG_ERR("Failed to get %s %s stats from kernel for l3 if %s", xtables_cmd, chain, if_name);
+        return 1;
+    }
+
+    /* Read the output lines and parse the statistics */
+    fgets(path, sizeof(path)-1, fp);
+    if(sscanf(path, "%"PRIu64"%"PRIu64, &packets, &bytes) < 2) {
+        VLOG_ERR("Failed to parse %s %s ucast stats for l3 if %s", xtables_cmd, chain, if_name);
+        return 1;
+    }
+
+    kernel_stats->uc_packets = packets;
+    kernel_stats->uc_bytes = bytes;
+
+
+    packets = 0;
+    bytes = 0;
+
+    fgets(path, sizeof(path)-1, fp);
+    if(sscanf(path, "%"PRIu64"%"PRIu64, &packets, &bytes) < 2) {
+        VLOG_ERR("Failed to parse %s %s mcast stats for l3 if %s", xtables_cmd, chain, if_name);
+        return 1;
+    }
+
+    kernel_stats->mc_packets = packets;
+    kernel_stats->mc_bytes = bytes;
+
+    pclose(fp);
+
+    /* Now add statistics for forwarded traffic */
+
+    packets = 0;
+    bytes = 0;
+
+    if(!strcmp(chain, "INPUT"))
+    {
+        snprintf(cmd, sizeof(cmd), "%s %s -L FORWARD -vx | awk '$5 == \"%s\" {print $1,$2}'",
+                 SWNS_EXEC, xtables_cmd, if_name);
+    }
+    else
+    {
+        snprintf(cmd, sizeof(cmd), "%s %s -L FORWARD -vx | awk '$6 == \"%s\" {print $1,$2}'",
+                 SWNS_EXEC, xtables_cmd, if_name);
+    }
+
+    fp = popen(cmd, "r");
+    if (fp == NULL) {
+        VLOG_ERR("Failed to get %s %s stats from kernel for l3 if %s", xtables_cmd, chain, if_name);
+        return 1;
+    }
+
+    fgets(path, sizeof(path)-1, fp);
+    if(sscanf(path, "%"PRIu64"%"PRIu64, &packets, &bytes) < 2) {
+        VLOG_ERR("Failed to parse %s %s ucast stats for l3 if %s", xtables_cmd, chain, if_name);
+        return 1;
+    }
+
+    kernel_stats->uc_packets += packets;
+    kernel_stats->uc_bytes += bytes;
+
+    packets = 0;
+    bytes = 0;
+
+    fgets(path, sizeof(path)-1, fp);
+    if(sscanf(path, "%"PRIu64"%"PRIu64, &packets, &bytes) < 2) {
+        VLOG_ERR("Failed to parse %s %s mcast stats for l3 if %s", xtables_cmd, chain, if_name);
+        return 1;
+    }
+
+    kernel_stats->mc_packets += packets;
+    kernel_stats->mc_bytes += bytes;
+
+    pclose(fp);
+    return 0;
+}
+
+static int
+netdev_sim_get_kernel_l3_stats(const char *if_name, struct netdev_stats *stats)
+{
+    int rc = 0;
+    struct kernel_l3_stats kernel_stats;
+
+    memset(&kernel_stats, 0, sizeof(kernel_stats));
+
+    /* IPV4 stats */
+    if(netdev_sim_l3stats_xtables_rule_installed(if_name, "iptables", "INPUT", "unicast") &&
+            netdev_sim_l3stats_xtables_rule_installed(if_name, "iptables", "INPUT", "multicast"))
+    {
+        rc = netdev_sim_get_kernel_l3_stats_util(if_name, &kernel_stats, "iptables", "INPUT");
+        if(rc){
+            return rc;
+        }
+        stats->ipv4_uc_rx_packets = kernel_stats.uc_packets;
+        stats->ipv4_mc_rx_packets = kernel_stats.mc_packets;
+        stats->ipv4_uc_rx_bytes = kernel_stats.uc_bytes;
+        stats->ipv4_mc_rx_bytes = kernel_stats.mc_bytes;
+    }
+    if(netdev_sim_l3stats_xtables_rule_installed(if_name, "iptables", "OUTPUT", "unicast") &&
+            netdev_sim_l3stats_xtables_rule_installed(if_name, "iptables", "OUTPUT", "multicast"))
+    {
+        rc = netdev_sim_get_kernel_l3_stats_util(if_name, &kernel_stats, "iptables", "OUTPUT");
+        if(rc){
+            return rc;
+        }
+        stats->ipv4_uc_tx_packets = kernel_stats.uc_packets;
+        stats->ipv4_mc_tx_packets = kernel_stats.mc_packets;
+        stats->ipv4_uc_tx_bytes = kernel_stats.uc_bytes;
+        stats->ipv4_mc_tx_bytes = kernel_stats.mc_bytes;
+    }
+
+    /* IPV6 stats */
+    if(netdev_sim_l3stats_xtables_rule_installed(if_name, "ip6tables", "INPUT", "unicast") &&
+            netdev_sim_l3stats_xtables_rule_installed(if_name, "ip6tables", "INPUT", "muticast"))
+    {
+        rc = netdev_sim_get_kernel_l3_stats_util(if_name, &kernel_stats, "ip6tables", "INPUT");
+        if(rc){
+            return rc;
+        }
+        stats->ipv6_uc_rx_packets = kernel_stats.uc_packets;
+        stats->ipv6_mc_rx_packets = kernel_stats.mc_packets;
+        stats->ipv6_uc_rx_bytes = kernel_stats.uc_bytes;
+        stats->ipv6_mc_rx_bytes = kernel_stats.mc_bytes;
+    }
+    if(netdev_sim_l3stats_xtables_rule_installed(if_name, "ip6tables", "OUTPUT", "unicast") &&
+            netdev_sim_l3stats_xtables_rule_installed(if_name, "ip6tables", "OUTPUT", "multicast"))
+    {
+        rc = netdev_sim_get_kernel_l3_stats_util(if_name, &kernel_stats, "ip6tables", "OUTPUT");
+        if(rc){
+            return rc;
+        }
+        stats->ipv6_uc_tx_packets = kernel_stats.uc_packets;
+        stats->ipv6_mc_tx_packets = kernel_stats.mc_packets;
+        stats->ipv6_uc_tx_bytes = kernel_stats.uc_bytes;
+        stats->ipv6_mc_tx_bytes = kernel_stats.mc_bytes;
+    }
+
+    /* Global L3 stats */
+    stats->l3_uc_tx_packets = stats->ipv4_uc_tx_packets + stats->ipv6_uc_tx_packets;
+    stats->l3_mc_tx_packets = stats->ipv4_mc_tx_packets + stats->ipv6_mc_tx_packets;
+    stats->l3_uc_tx_bytes = stats->ipv4_uc_tx_bytes + stats->ipv6_uc_tx_bytes;
+    stats->l3_mc_tx_bytes = stats->ipv4_mc_tx_bytes + stats->ipv6_mc_tx_bytes;
+
+    stats->l3_uc_rx_packets = stats->ipv4_uc_rx_packets + stats->ipv6_uc_rx_packets;
+    stats->l3_mc_rx_packets = stats->ipv4_mc_rx_packets + stats->ipv6_mc_rx_packets;
+    stats->l3_uc_rx_bytes = stats->ipv4_uc_rx_bytes + stats->ipv6_uc_rx_bytes;
+    stats->l3_mc_rx_bytes = stats->ipv4_mc_rx_bytes + stats->ipv6_mc_rx_bytes;
+
+    return rc;
 }
