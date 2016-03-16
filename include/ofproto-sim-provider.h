@@ -187,4 +187,6 @@ static struct sim_provider_ofport *get_ofp_port(const struct sim_provider_node
                                                 *ofproto, ofp_port_t ofp_port);
 
 extern const struct ofproto_class ofproto_sim_provider_class;
+extern int netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev);
+extern int netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev);
 #endif /* ofproto/ofproto-sim-provider.h */
