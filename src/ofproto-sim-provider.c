@@ -1348,40 +1348,40 @@ sflow_cfg_set(struct ofproto_sflow_options *ofproto_cfg,
     sim_cfg->set = true;
 }
 
-/* add iptable rules to collect packets using the ulog facility in Linux */
+/* add iptable rules to collect packets using the nflog facility in Linux */
 static void
 sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
 {
     int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "%s iptables -I INPUT -i %s -m statistic --mode random --probability %0.3f -j ULOG "
-            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            "%s iptables -I INPUT -i %s -m statistic --mode random --probability %0.3f -j NFLOG "
+            "--nflog-prefix SFLOW --nflog-group %d",
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "%s iptables -I OUTPUT -o %s -m statistic --mode random --probability %0.3f -j ULOG "
-            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            "%s iptables -I OUTPUT -o %s -m statistic --mode random --probability %0.3f -j NFLOG "
+            "--nflog-prefix SFLOW --nflog-group %d",
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "%s iptables -I FORWARD -i %s -m statistic --mode random --probability %0.3f -j ULOG "
-            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            "%s iptables -I FORWARD -i %s -m statistic --mode random --probability %0.3f -j NFLOG "
+            "--nflog-prefix SFLOW --nflog-group %d",
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "%s iptables -I FORWARD -o %s -m statistic --mode random --probability %0.3f -j ULOG "
-            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            "%s iptables -I FORWARD -o %s -m statistic --mode random --probability %0.3f -j NFLOG "
+            "--nflog-prefix SFLOW --nflog-group %d",
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
@@ -1393,33 +1393,33 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
     int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "%s iptables -D INPUT -i %s -m statistic --mode random --probability %0.3f -j ULOG "
-            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            "%s iptables -D INPUT -i %s -m statistic --mode random --probability %0.3f -j NFLOG "
+            "--nflog-prefix SFLOW --nflog-group %d",
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "%s iptables -D OUTPUT -o %s -m statistic --mode random --probability %0.3f -j ULOG "
-            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            "%s iptables -D OUTPUT -o %s -m statistic --mode random --probability %0.3f -j NFLOG "
+            "--nflog-prefix SFLOW --nflog-group %d",
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "%s iptables -D FORWARD -i %s -m statistic --mode random --probability %0.3f -j ULOG "
-            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            "%s iptables -D FORWARD -i %s -m statistic --mode random --probability %0.3f -j NFLOG "
+            "--nflog-prefix SFLOW --nflog-group %d",
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
     cmd_len = 0;
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-            "%s iptables -D FORWARD -o %s -m statistic --mode random --probability %0.3f -j ULOG "
-            "--ulog-prefix SFLOW --ulog-nlgroup %d --ulog-qthreshold 1",
-            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_ULOG_GRP);
+            "%s iptables -D FORWARD -o %s -m statistic --mode random --probability %0.3f -j NFLOG "
+            "--nflog-prefix SFLOW --nflog-group %d",
+            SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
     }
@@ -1585,9 +1585,9 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
         cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "}\n");
     }
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-                        "ulogGroup = %d\n", HOSTSFLOW_ULOG_GRP);
+                        "nflogGroup = %d\n", HOSTSFLOW_NFLOG_GRP);
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-                        "ulogProbability = %0.3f\n", 1/(double)ofproto_cfg->sampling_rate);
+                        "nflogProbability = %0.3f\n", 1/(double)ofproto_cfg->sampling_rate);
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "}\n");
     if ((fprintf(fp, "%s", cmd_str)) < 0) {
         VLOG_ERR("Failed to write to host sflow cfg file '%s'. rc='%s'",
