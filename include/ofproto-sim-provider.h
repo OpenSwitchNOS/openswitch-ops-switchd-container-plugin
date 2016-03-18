@@ -25,7 +25,7 @@
 #define MAX_CLI                 1024
 #define OVS_VSCTL               "/opt/openvswitch/bin/ovs-vsctl"
 #define HOSTSFLOW_CFG_FILENAME  "/etc/hsflowd.conf"
-#define HOSTSFLOW_ULOG_GRP      5
+#define HOSTSFLOW_NFLOG_GRP     5
 #define ASIC_OVSDB_PATH         "/var/run/openvswitch-sim/ovsdb.db"
 #define APPCTL                  "/opt/openvswitch/bin/ovs-appctl"
 #define OVS_SIM                 "ovs-vswitchd-sim"
