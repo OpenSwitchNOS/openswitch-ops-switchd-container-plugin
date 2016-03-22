@@ -21,6 +21,7 @@
 #define OFPROTO_SIM_PROVIDER_H 1
 
 #include "ofproto/ofproto-provider.h"
+#include "hmapx.h"
 
 #define MAX_CLI                 1024
 #define OVS_VSCTL               "/opt/openvswitch/bin/ovs-vsctl"
@@ -30,6 +31,52 @@
 
 #define HOSTSFLOW_CFG_FILENAME  "/etc/hsflowd.conf"
 #define HOSTSFLOW_NFLOG_GRP     5
+
+#define MAX_MIRRORS 32
+#define MAX_MIRROR_NAME_LEN 64
+
+typedef uint32_t mirror_mask_t;
+
+struct mbundle {
+    struct hmap_node hmap_node; /* In parent 'mbridge' map. */
+    struct ofbundle *ofbundle;
+
+    mirror_mask_t src_mirrors;  /* Mirrors triggered when packet received. */
+    mirror_mask_t dst_mirrors;  /* Mirrors triggered when packet sent. */
+    mirror_mask_t mirror_out;   /* Mirrors that output to this mbundle. */
+};
+
+struct mirror {
+    struct mbridge *mbridge;    /* Owning ofproto. */
+    size_t idx;                 /* In ofproto's "mirrors" array. */
+    void *aux;                  /* Key supplied by ofproto's client. */
+
+    /* Selection criteria. */
+    struct hmapx srcs;          /* Contains "struct mbundle*"s. */
+    struct hmapx dsts;          /* Contains "struct mbundle*"s. */
+    unsigned long *vlans;       /* Bitmap of chosen VLANs, NULL selects all. */
+
+    /* Output (exactly one of out == NULL and out_vlan == -1 is true). */
+    struct mbundle *out;        /* Output port or NULL. */
+    int out_vlan;               /* Output VLAN or -1. */
+    mirror_mask_t dup_mirrors;  /* Bitmap of mirrors with the same output. */
+
+    /* Counters. */
+    int64_t packet_count;       /* Number of packets sent. */
+    int64_t byte_count;         /* Number of bytes sent. */
+
+    char *name; /* Mirror name for logging */
+};
+
+struct mbridge {
+    struct mirror *mirrors[MAX_MIRRORS];
+    struct hmap mbundles;
+
+    bool need_revalidate;
+    bool has_mirrors;
+
+    struct ovs_refcount ref_cnt;
+};
 
 struct sim_provider_rule {
     struct rule up;
@@ -205,6 +252,14 @@ static void rule_get_stats(struct rule *, uint64_t * packets,
 static void bundle_remove(struct ofport *);
 static struct sim_provider_ofport *get_ofp_port(const struct sim_provider_node
                                                 *ofproto, ofp_port_t ofp_port);
+
+static struct mirror *mirror_lookup(struct mbridge *, void *aux);
+static struct mbundle *mbundle_lookup(const struct mbridge *,
+                                      struct ofbundle *);
+static void mbundle_lookup_multiple(const struct mbridge *, struct ofbundle **,
+                                  size_t n_bundles, struct hmapx *mbundles);
+static int mirror_scan(struct mbridge *);
+static void mirror_destroy(struct mbridge *mbridge, void *aux);
 
 extern const struct ofproto_class ofproto_sim_provider_class;
 
