@@ -24,8 +24,12 @@
                              (strlen((s1)) == strlen((s2))) && \
                              (!strncmp((s1), (s2), strlen((s2)))))
 
+#define MAX_CMD_LEN     2048
+#define SWNS_EXEC       "/sbin/ip netns exec swns"
+
 /* SIM provider API. */
 void netdev_sim_register(void);
 extern int netdev_sim_get_hw_id(struct netdev *netdev);
+void netdev_update_sflow_reset(struct netdev *netdev);
 
 #endif /* netdev-sim.h */
