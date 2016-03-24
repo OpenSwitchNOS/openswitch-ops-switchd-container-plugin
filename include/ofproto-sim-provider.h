@@ -24,6 +24,8 @@
 
 #define MAX_CLI                 1024
 #define OVS_VSCTL               "/opt/openvswitch/bin/ovs-vsctl"
+#define HOSTSFLOW_CFG_FILENAME  "/etc/hsflowd.conf"
+#define HOSTSFLOW_NFLOG_GRP     5
 #define ASIC_OVSDB_PATH         "/var/run/openvswitch-sim/ovsdb.db"
 #define APPCTL                  "/opt/openvswitch/bin/ovs-appctl"
 #define OVS_SIM                 "ovs-vswitchd-sim"
@@ -69,6 +71,7 @@ struct ofbundle {
     bool is_vlan_routing_enabled;       /* If VLAN routing is enabled on this
                                          * bundle. */
     bool is_bridge_bundle;      /* If the bundle is internal for the bridge. */
+    bool is_sflow_enabled;      /* If slow is enabled for this bundle */
 };
 
 struct sim_provider_ofport {
@@ -107,6 +110,17 @@ struct sim_provider_ofport {
 
     bool iptable_rules_added;   /* If IP table rules added to drop L2 traffic.
                                  */
+};
+
+struct sim_sflow_cfg {
+    struct sset ports; /* port names where sflow config is applied (for VRF) */
+    struct sset targets;
+    uint32_t sampling_rate;
+    uint32_t polling_interval;
+    uint32_t header_len;
+    uint32_t max_datagram;
+    char *agent_device;
+    bool set;
 };
 
 struct sim_provider_node {
@@ -166,6 +180,7 @@ struct sim_provider_node {
 
     bool vrf;                   /* Specifies whether specific ofproto instance
                                  * is backing up VRF and not bridge */
+    struct sim_sflow_cfg sflow; /* sflow configuration */
 };
 
 struct sim_provider_port_dump_state {

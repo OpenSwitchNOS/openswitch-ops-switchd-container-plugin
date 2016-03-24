@@ -36,6 +36,7 @@
 #include "netdev-sim.h"
 #include "ovs-atomic.h"
 
+#define MAX_CMD_LEN             2048
 #define SWNS_EXEC       "/sbin/ip netns exec swns"
 
 VLOG_DEFINE_THIS_MODULE(netdev_sim);
@@ -69,6 +70,13 @@ struct netdev_sim {
     bool autoneg;
     bool pause_tx;
     bool pause_rx;
+
+    /* used for maintaining L3 sflow stats */
+    uint32_t sflow_resets;
+    uint64_t sflow_prev_ingress_pkts;
+    uint64_t sflow_prev_ingress_bytes;
+    uint64_t sflow_prev_egress_pkts;
+    uint64_t sflow_prev_egress_bytes;
 };
 
 static int netdev_sim_construct(struct netdev *);
@@ -119,6 +127,11 @@ netdev_sim_construct(struct netdev *netdev_)
     netdev->mtu = 1500;
     netdev->flags = 0;
     netdev->link_state = 0;
+    netdev->sflow_resets = 0;
+    netdev->sflow_prev_ingress_pkts = 0;
+    netdev->sflow_prev_ingress_bytes = 0;
+    netdev->sflow_prev_egress_pkts = 0;
+    netdev->sflow_prev_egress_bytes = 0;
 
     ovs_mutex_unlock(&netdev->mutex);
 
@@ -323,10 +336,80 @@ netdev_sim_get_etheraddr(const struct netdev *netdev,
     return 0;
 }
 
+/* Gets the sflow counters from iptable rules. They get reset to zero when
+ * sflow gets disabled and re-enabled.
+ */
+static void
+netdev_sim_get_iptable_stats(char *port, bool ingress, uint64_t *pkts,
+                             uint64_t *bytes)
+{
+    FILE *fp;
+    char cmd_str[MAX_CMD_LEN];
+    char buffer[16] = {0};
+
+    *pkts = 0;
+    *bytes = 0;
+    snprintf(cmd_str, sizeof(cmd_str), "%s iptables -S -v | grep SFLOW | grep '%c %s' "
+             "| awk -F ' ' '{print $12}' | awk '{ sum+=$1} END {print sum}'",
+             SWNS_EXEC, ingress ? 'i' : 'o', port);
+    fp = popen(cmd_str, "r");
+    fgets(buffer, sizeof(buffer), fp);
+    *pkts = atoll(buffer);
+    pclose(fp);
+
+    snprintf(cmd_str, sizeof(cmd_str), "%s iptables -S -v | grep SFLOW | grep '%c %s' "
+             "| awk -F ' ' '{print $13}' | awk '{ sum+=$1} END {print sum}'",
+             SWNS_EXEC, ingress ? 'i' : 'o', port);
+    fp = popen(cmd_str, "r");
+    fgets(buffer, sizeof(buffer), fp);
+    *bytes = atoll(buffer);
+    pclose(fp);
+
+}
+
+static void
+netdev_sim_update_sflow_stats(struct netdev_sim *netdev)
+{
+    uint64_t in_pkts = 0, in_bytes = 0;
+    uint64_t out_pkts = 0, out_bytes = 0;
+
+    netdev_sim_get_iptable_stats(netdev->up.name, true, &in_pkts, &in_bytes);
+    netdev_sim_get_iptable_stats(netdev->up.name, false, &out_pkts, &out_bytes);
+
+    ovs_mutex_lock(&netdev->mutex);
+
+    if (netdev->sflow_resets > 0 ||
+        netdev->sflow_prev_ingress_pkts > in_pkts ||
+        netdev->sflow_prev_egress_pkts > out_pkts) {
+        netdev->stats.sflow_ingress_packets += in_pkts;
+        netdev->stats.sflow_ingress_bytes += in_bytes;
+        netdev->stats.sflow_egress_packets += out_pkts;
+        netdev->stats.sflow_egress_bytes += out_bytes;
+    } else {
+        netdev->stats.sflow_ingress_packets += in_pkts -
+                                            netdev->sflow_prev_ingress_pkts;
+        netdev->stats.sflow_ingress_bytes += in_bytes -
+                                            netdev->sflow_prev_ingress_bytes;
+        netdev->stats.sflow_egress_packets += out_pkts -
+                                            netdev->sflow_prev_egress_pkts;
+        netdev->stats.sflow_egress_bytes += out_bytes -
+                                            netdev->sflow_prev_egress_bytes;
+    }
+
+    netdev->sflow_prev_ingress_pkts = in_pkts;
+    netdev->sflow_prev_ingress_bytes = in_bytes;
+    netdev->sflow_prev_egress_pkts = out_pkts;
+    netdev->sflow_prev_egress_bytes = out_bytes;
+    netdev->sflow_resets = 0;
+
+    ovs_mutex_unlock(&netdev->mutex);
+}
+
 static int
 netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
+
     int rc = 0;
     rc = netdev_get_kernel_stats(dev->linux_intf_name, &dev->stats);
     if (rc < 0)
@@ -334,6 +417,8 @@ netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
         VLOG_ERR("Failed to get interface statistics for interface %s", dev->linux_intf_name);
         return -1;
     }
+
+    netdev_sim_update_sflow_stats(dev);
     ovs_mutex_lock(&dev->mutex);
     *stats = dev->stats;
     ovs_mutex_unlock(&dev->mutex);
@@ -856,4 +941,20 @@ netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats)
     close(sock);
 
     return 0;
+}
+
+/* update sflow enable events so that netdev sflow statistics
+ * can take care of the event. This has to be done because sflow
+ * iptable rules clear the counters when sflow gets disabled, but
+ * the db counters has to keep incrementing, so we need a way to
+ * know when to add iptable counters to db and when to do a diff
+ * before adding to the db.
+ */
+void
+netdev_update_sflow_reset(struct netdev *netdev_)
+{
+    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
+    ovs_mutex_lock(&netdev->mutex);
+    netdev->sflow_resets++;
+    ovs_mutex_unlock(&netdev->mutex);
 }
