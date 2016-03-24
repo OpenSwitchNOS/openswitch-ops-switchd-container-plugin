@@ -1319,14 +1319,14 @@ apply_qos_profile(struct ofproto *ofproto,
 
     for (index = 0; index < q_settings->n_entries; index++) {
         qp_entry = q_settings->entries[index];
-        VLOG_INFO("... %d q=%d #lp=%d", index,
-                  qp_entry->queue, qp_entry->n_local_priorities);
+        VLOG_DBG("... %d q=%d #lp=%d", index,
+                 qp_entry->queue, qp_entry->n_local_priorities);
     }
 
     for (index = 0; index < s_settings->n_entries; index++) {
         sp_entry = s_settings->entries[index];
-        VLOG_INFO("... %d q=%d alg=%d wt=%d", index,
-                  sp_entry->queue, sp_entry->algorithm, sp_entry->weight);
+        VLOG_DBG("... %d q=%d alg=%d wt=%d", index,
+                 sp_entry->queue, sp_entry->algorithm, sp_entry->weight);
     }
 
     return 0;
