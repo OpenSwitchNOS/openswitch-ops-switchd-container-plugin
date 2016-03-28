@@ -50,10 +50,12 @@ class vlanModeTest( OpsVsiTest ):
                 "enabled in the global VLAN table ###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl add-port bridge_normal 1")
         s1.ovscmd("/usr/bin/ovs-vsctl set interface 1 user_config:admin=up")
-        port_name = s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl get port 1 "
-                              "vlan_mode")
-        assert not "trunk" in port_name, "Port 1 got added in " \
-            "'ASIC' OVS even without any global VLAN enabled"
+
+        port_trunk = s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl get port 1 "
+                              "trunks")
+        assert "[1]" in port_trunk, "Port 1 did not trunk VLAN100 " \
+            "by default"
+
         info("### Port 1 did not get added in 'ASIC' OVS as expected ###\n\n")
 
         info("### Enabling VLAN100 in the global VLAN table ###\n")
@@ -67,7 +69,7 @@ class vlanModeTest( OpsVsiTest ):
                 "###\n")
         port_trunk = s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl get port 1 "
                               "trunks")
-        assert "[100]" in port_trunk, "Port 1 did not trunk VLAN100 " \
+        assert "[1, 100]" in port_trunk, "Port 1 did not trunk VLAN100 " \
             "by default"
         info("### Port 1 trunks enabled VLAN100 by default " \
                 "when no trunks are explicitly configured ###\n")
@@ -90,6 +92,7 @@ class vlanModeTest( OpsVsiTest ):
                 "fly ########\n")
         info("### Specifying just the tag field while adding port 1 ###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl add-port bridge_normal 1 tag=100")
+        time.sleep(2)
         port_mode, port_tag = s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl get " \
                 "port 1 vlan_mode tag").splitlines()
         assert "access" in port_mode and "100" in port_tag, "Port 1 did not " \
@@ -100,6 +103,7 @@ class vlanModeTest( OpsVsiTest ):
         info("### Changing vlan mode to 'trunk' using ovs-vsctl set feature " \
                 "###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl set port 1 vlan_mode=trunk")
+        time.sleep(2)
         port_mode, port_trunk = s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl " \
                 "get port 1 vlan_mode trunks").splitlines()
         assert "trunk" in port_mode and "100" in port_trunk, "Port 1 did " \
@@ -111,6 +115,7 @@ class vlanModeTest( OpsVsiTest ):
                 "feature ###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl set port 1 vlan_mode=native-tagged "\
                 "tag=100 trunks=100")
+        time.sleep(2)
         port_mode, port_trunk, port_tag = \
         s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl get port 1 vlan_mode " \
                 "trunks tag").splitlines()
@@ -124,6 +129,7 @@ class vlanModeTest( OpsVsiTest ):
                 "set feature ###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl set port 1 vlan_mode=native-untagged "\
                 "tag=100 trunks=100")
+        time.sleep(2)
         port_mode, port_trunk, port_tag = \
         s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl get port 1 vlan_mode " \
                 "trunks tag").splitlines()
@@ -177,12 +183,17 @@ class vlanModeTest( OpsVsiTest ):
                 "reconfiguration ########\n")
         info("### Deleting VLAN100 from the global VLAN table ###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl del-vlan bridge_normal 100")
+        time.sleep(1)
         info("### Adding port 2 without an VLAN configuration specified ###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl add-port bridge_normal 2")
-        port_name = s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl get port 2 "
-                              "vlan_mode")
-        assert not "trunk" in port_name, "Port 2 got added in " \
-            "'ASIC' OVS even without any global VLAN enabled"
+        time.sleep(1)
+        s1.ovscmd("/usr/bin/ovs-vsctl set interface 2 user_config:admin=up")
+        time.sleep(1)
+        port_trunk = s1.ovscmd("/opt/openvswitch/bin/ovs-vsctl get port 2 "
+                              "trunks")
+        assert "[1]" in port_trunk, "Port 2 did not trunk VLAN100 " \
+            "by default"
+
         info("### Port 2 did not get added in 'ASIC' OVS as expected ###\n\n")
         info("### Adding VLAN100 and VLAN200 in the global VLAN table ###\n")
         s1.ovscmd("/usr/bin/ovs-vsctl add-vlan bridge_normal 100 admin=up")
