@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <net/if.h>
+#include <string.h>
 
 #include "config.h"
 #include "ofproto/ofproto-provider.h"
@@ -39,6 +40,7 @@ VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
 #define MAX_CMD_LEN             2048
 #define SWNS_EXEC               "/sbin/ip netns exec swns"
+#define MIRROR_MASK_C(X) UINT32_C(X)
 
 static struct sim_provider_ofport *
 sim_provider_ofport_cast(const struct ofport *ofport)
@@ -115,6 +117,55 @@ port_open_type(const char *datapath_type OVS_UNUSED, const char *port_type)
     return "system";
 }
 
+struct mbridge *
+mbridge_create(void)
+{
+    struct mbridge *mbridge;
+
+    mbridge = xzalloc(sizeof *mbridge);
+    ovs_refcount_init(&mbridge->ref_cnt);
+
+    hmap_init(&mbridge->mbundles);
+    return mbridge;
+}
+
+void
+mbridge_register_bundle(struct mbridge *mbridge, struct ofbundle *ofbundle)
+{
+    struct mbundle *mbundle;
+
+    mbundle = xzalloc(sizeof *mbundle);
+    mbundle->ofbundle = ofbundle;
+    hmap_insert(&mbridge->mbundles, &mbundle->hmap_node,
+                hash_pointer(ofbundle, 0));
+}
+
+void
+mbridge_unregister_bundle(struct mbridge *mbridge, struct ofbundle *ofbundle)
+{
+    struct mbundle *mbundle = mbundle_lookup(mbridge, ofbundle);
+    size_t i;
+
+    if (!mbundle) {
+        return;
+    }
+
+    for (i = 0; i < MAX_MIRRORS; i++) {
+        struct mirror *m = mbridge->mirrors[i];
+        if (m) {
+            if (m->out == mbundle) {
+                mirror_destroy(mbridge, m->aux);
+            } else if (hmapx_find_and_delete(&m->srcs, mbundle)
+                       || hmapx_find_and_delete(&m->dsts, mbundle)) {
+                mbridge->need_revalidate = true;
+            }
+        }
+    }
+
+    hmap_remove(&mbridge->mbundles, &mbundle->hmap_node);
+    free(mbundle);
+}
+
 /* Basic life-cycle. */
 
 static struct ofproto *
@@ -182,6 +233,7 @@ construct(struct ofproto *ofproto_)
     ofproto->dump_seq = 0;
     hmap_init(&ofproto->bundles);
     ofproto->ms = NULL;
+    ofproto->mbridge = mbridge_create();
     ofproto->has_bonded_bundles = false;
     ofproto->lacp_enabled = false;
     ofproto_tunnel_init();
@@ -484,6 +536,7 @@ bundle_destroy(struct ofbundle *bundle)
     }
 
     ofproto = bundle->ofproto;
+    mbridge_unregister_bundle(ofproto->mbridge, bundle);
 
     if (bundle->is_added_to_sim_ovs == true) {
         snprintf(cmd_str, MAX_CMD_LEN, "%s del-port %s", OVS_VSCTL,
@@ -694,6 +747,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         bundle->is_added_to_sim_ovs = false;
         bundle->is_vlan_routing_enabled = false;
         bundle->is_bridge_bundle = false;
+        mbridge_register_bundle(ofproto->mbridge, bundle);
     }
 
     if (!bundle->name || strcmp(s->name, bundle->name)) {
@@ -912,8 +966,352 @@ set_vlan(struct ofproto *ofproto_, int vid, bool add)
 
 /* Mirrors. */
 static int
-mirror_get_stats__(struct ofproto *ofproto OVS_UNUSED, void *aux OVS_UNUSED,
-                   uint64_t * packets OVS_UNUSED, uint64_t * bytes OVS_UNUSED)
+mirror_set(struct ofproto *ofproto_, void *aux,
+                      const struct ofproto_mirror_settings *s)
+{
+	struct mbundle *mbundle, *out;
+    struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+    char cmd_str[MAX_CMD_LEN];
+    int i=0, n = 0;
+    struct mirror *mirror;
+    mirror_mask_t mirror_bit;
+    struct mbridge *mbridge;
+    struct ofbundle **srcs, **dsts;
+    struct hmapx srcs_map;          /* Contains "struct ofbundle *"s. */
+    struct hmapx dsts_map;          /* Contains "struct ofbundle *"s. */
+    struct ofbundle *out_bundle;
+
+    VLOG_DBG("%s:Entry()", __FUNCTION__);
+
+    hmapx_init(&srcs_map);
+    hmapx_init(&dsts_map);
+
+    mbridge = ofproto->mbridge;
+    mirror = mirror_lookup(mbridge, aux);
+
+    if (NULL != s) {
+        /*This is a mirror create/modify. Save a copy of the mirror config in mbridge */
+        if (!mirror) {
+            int idx;
+
+            VLOG_DBG("%s:Existing mirror not found", __FUNCTION__);
+
+            idx = mirror_scan(mbridge);
+            if (idx < 0) {
+                VLOG_WARN("maximum of %d port mirrors reached, cannot create %s",
+                        MAX_MIRRORS, s->name);
+                return EFBIG;
+            }
+
+            VLOG_DBG("%s:Allocating new mirror", __FUNCTION__);
+            mirror = mbridge->mirrors[idx] = xzalloc(sizeof *mirror);
+            mirror->mbridge = mbridge;
+            mirror->idx = idx;
+            mirror->aux = aux;
+            mirror->out_vlan = -1;
+            mirror->name = xzalloc(MAX_MIRROR_NAME_LEN);
+            strncpy (mirror->name, s->name, MAX_MIRROR_NAME_LEN);
+            mirror->name[MAX_MIRROR_NAME_LEN] = '\0';
+        }
+
+        if (s->out_bundle) {
+            out_bundle = bundle_lookup(ofproto, s->out_bundle);
+            /* Get the new configuration. */
+            if (out_bundle) {
+                VLOG_DBG("%s:Mirror output %s", __FUNCTION__, out_bundle->name);
+                out = mbundle_lookup(mbridge, out_bundle);
+                if (!out) {
+                    mirror_destroy(mbridge, mirror->aux);
+                    return EINVAL;
+                }
+                /* s->out_vlan = -1;*/
+            } else {
+                out = NULL;
+            }
+        } else {
+            out = NULL;
+        }
+
+        if (s->n_srcs > 0) {
+            srcs = xmalloc(s->n_srcs * sizeof *srcs);
+            for (i = 0; i < s->n_srcs; i++) {
+                srcs[i] = bundle_lookup(ofproto, s->srcs[i]);
+            }
+            mbundle_lookup_multiple(mbridge, srcs, s->n_srcs, &srcs_map);
+        }
+        if (s->n_dsts > 0) {
+            dsts = xmalloc(s->n_dsts * sizeof *dsts);
+            for (i = 0; i < s->n_dsts; i++) {
+                dsts[i] = bundle_lookup(ofproto, s->dsts[i]);
+            }
+            mbundle_lookup_multiple(mbridge, dsts, s->n_dsts, &dsts_map);
+        }
+
+        if (hmapx_equals(&srcs_map, &mirror->srcs)
+                && hmapx_equals(&dsts_map, &mirror->dsts)
+                && vlan_bitmap_equal(mirror->vlans, s->src_vlans)
+                && mirror->out == out
+                && mirror->out_vlan == s->out_vlan) {
+            /* If the configuration has not changed, do nothing. */
+            hmapx_destroy(&srcs_map);
+            hmapx_destroy(&dsts_map);
+            return 0;
+        }
+
+
+        hmapx_swap(&srcs_map, &mirror->srcs);
+        hmapx_destroy(&srcs_map);
+
+        hmapx_swap(&dsts_map, &mirror->dsts);
+        hmapx_destroy(&dsts_map);
+
+        free(mirror->vlans);
+        mirror->vlans = vlan_bitmap_clone(s->src_vlans);
+
+        mirror->out = out;
+        mirror->out_vlan = s->out_vlan;
+
+        /* Update mbundles. */
+        mirror_bit = MIRROR_MASK_C(1) << mirror->idx;
+        HMAP_FOR_EACH (mbundle, hmap_node, &mirror->mbridge->mbundles) {
+            if (hmapx_contains(&mirror->srcs, mbundle)) {
+                mbundle->src_mirrors |= mirror_bit;
+            } else {
+                mbundle->src_mirrors &= ~mirror_bit;
+            }
+
+            if (hmapx_contains(&mirror->dsts, mbundle)) {
+                mbundle->dst_mirrors |= mirror_bit;
+            } else {
+                mbundle->dst_mirrors &= ~mirror_bit;
+            }
+
+            if (mirror->out == mbundle) {
+                mbundle->mirror_out |= mirror_bit;
+            } else {
+                mbundle->mirror_out &= ~mirror_bit;
+            }
+        }
+
+        mbridge->has_mirrors = true;
+        mirror_update_dups(mbridge);
+
+        /************************************************************/
+        /* Build the command to construct the mirror in openvswitch */
+        /************************************************************/
+
+        /* TODO: vLANs aren't supported yet */
+
+        /* TODO: mirror modify not supported yet */
+
+        /***********************************/
+        /* Create a new mirror             */
+        n = snprintf(cmd_str, MAX_CMD_LEN,
+                "%s -- --id=@m create mirror name=%s -- add bridge bridge_normal mirrors @m ",
+                OVS_VSCTL, s->name);
+
+        /***********************************/
+        /* Add the ingress ports           */
+        for (i = 0; i < s->n_srcs; i++) {
+            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    "-- --id=@srx%s get port %s ",
+                    srcs[i]->name, srcs[i]->name);
+            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    "-- set mirror %s select-src-port=@srx%s ",
+                    s->name, srcs[i]->name);
+        }
+
+        /***********************************/
+        /* Add the egress ports            */
+        for (i = 0; i < s->n_dsts; i++) {
+            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    "-- --id=@stx%s get port %s ",
+                    dsts[i]->name, dsts[i]->name);
+            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    "-- set mirror %s select-dst-port=@stx%s ",
+                    s->name, dsts[i]->name);
+        }
+
+        /***********************************/
+        /* Set the output port             */
+        if (out_bundle) {
+        n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                "-- --id=@out get port %s ",
+                out_bundle->name);
+        n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                "-- set mirror %s output-port=@out ",
+                s->name);
+        }
+
+        VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to create mirror %s. %s", s->name, strerror(errno));
+            mirror_destroy(mbridge, mirror->aux);
+            return errno;
+        }
+
+        free(srcs);
+        free(dsts);
+    } else {
+        /************************************************************/
+        /* Build the command to delete the mirror in openvswitch */
+        /************************************************************/
+        n = snprintf(cmd_str, MAX_CMD_LEN,
+                "%s -- --id=@m get mirror %s -- remove bridge bridge_normal mirrors @m",
+                OVS_VSCTL, mirror->name);
+
+        VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to delete mirror %s. %s", mirror->name, strerror(errno));
+            return errno;
+        }
+
+        /* Now we can delete our copy of the mirror config */
+        mirror_destroy(mbridge, aux);
+    }
+
+    return 0;
+}
+
+static struct mirror *
+mirror_lookup(struct mbridge *mbridge, void *aux)
+{
+    int i;
+
+    for (i = 0; i < MAX_MIRRORS; i++) {
+        struct mirror *mirror = mbridge->mirrors[i];
+        if (mirror && mirror->aux == aux) {
+            return mirror;
+        }
+    }
+
+    return NULL;
+}
+
+static struct mbundle *
+mbundle_lookup(const struct mbridge *mbridge, struct ofbundle *ofbundle)
+{
+    struct mbundle *mbundle;
+
+    HMAP_FOR_EACH_IN_BUCKET (mbundle, hmap_node, hash_pointer(ofbundle, 0),
+                             &mbridge->mbundles) {
+        if (mbundle->ofbundle == ofbundle) {
+            return mbundle;
+        }
+    }
+    return NULL;
+}
+
+
+void
+mirror_destroy(struct mbridge *mbridge, void *aux)
+{
+    struct mirror *mirror = mirror_lookup(mbridge, aux);
+    mirror_mask_t mirror_bit;
+    struct mbundle *mbundle;
+    int i;
+
+    if (!mirror) {
+        VLOG_DBG("%s:Existing mirror not found, nothing to delete", __FUNCTION__);
+        return;
+    }
+
+    VLOG_DBG("%s:Deleting mirror %s", __FUNCTION__, mirror->name);
+    i = mirror->idx;
+    mirror_bit = MIRROR_MASK_C(1) << mirror->idx;
+    HMAP_FOR_EACH (mbundle, hmap_node, &mbridge->mbundles) {
+        mbundle->src_mirrors &= ~mirror_bit;
+        mbundle->dst_mirrors &= ~mirror_bit;
+        mbundle->mirror_out &= ~mirror_bit;
+    }
+
+    hmapx_destroy(&mirror->srcs);
+    hmapx_destroy(&mirror->dsts);
+
+    free(mirror->name);
+    free(mirror->vlans);
+    free(mirror);
+
+    mbridge->mirrors[i] = NULL;
+
+    mirror_update_dups(mbridge);
+
+    mbridge->has_mirrors = false;
+    for (i = 0; i < MAX_MIRRORS; i++) {
+        if (mbridge->mirrors[i]) {
+            mbridge->has_mirrors = true;
+            break;
+        }
+    }
+}
+
+/* Update the 'dup_mirrors' member of each of the mirrors in 'ofproto'. */
+static void
+mirror_update_dups(struct mbridge *mbridge)
+{
+    int i;
+
+    for (i = 0; i < MAX_MIRRORS; i++) {
+        struct mirror *m = mbridge->mirrors[i];
+
+        if (m) {
+            m->dup_mirrors = MIRROR_MASK_C(1) << i;
+        }
+    }
+
+    for (i = 0; i < MAX_MIRRORS; i++) {
+        struct mirror *m1 = mbridge->mirrors[i];
+        int j;
+
+        if (!m1) {
+            continue;
+        }
+
+        for (j = i + 1; j < MAX_MIRRORS; j++) {
+            struct mirror *m2 = mbridge->mirrors[j];
+
+            if (m2 && m1->out == m2->out && m1->out_vlan == m2->out_vlan) {
+                m1->dup_mirrors |= MIRROR_MASK_C(1) << j;
+                m2->dup_mirrors |= m1->dup_mirrors;
+            }
+        }
+    }
+}
+
+static int
+mirror_scan(struct mbridge *mbridge)
+{
+    int idx;
+
+    for (idx = 0; idx < MAX_MIRRORS; idx++) {
+        if (!mbridge->mirrors[idx]) {
+            return idx;
+        }
+    }
+    return -1;
+}
+
+static void
+mbundle_lookup_multiple(const struct mbridge *mbridge,
+                        struct ofbundle **ofbundles, size_t n_ofbundles,
+                        struct hmapx *mbundles)
+{
+    size_t i;
+
+    hmapx_init(mbundles);
+    for (i = 0; i < n_ofbundles; i++) {
+        struct mbundle *mbundle = mbundle_lookup(mbridge, ofbundles[i]);
+        if (mbundle) {
+            hmapx_add(mbundles, mbundle);
+        }
+    }
+}
+
+static int
+mirror_get_stats__(struct ofproto *ofproto, void *aux,
+                   uint64_t * packets, uint64_t * bytes)
 {
     return 0;
 }
@@ -1343,7 +1741,7 @@ const struct ofproto_class ofproto_sim_provider_class = {
     bundle_remove,
     bundle_get,
     set_vlan,
-    NULL,                       /* may implement mirror_set__ */
+    mirror_set,
     mirror_get_stats__,
     NULL,                       /* may implement set_flood_vlans */
     is_mirror_output_bundle,
