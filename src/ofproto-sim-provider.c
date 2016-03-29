@@ -1440,4 +1440,5 @@ const struct ofproto_class ofproto_sim_provider_class = {
     NULL,                       /* l3 route action - install, update, delete */
     NULL,                       /* enable/disable ECMP globally */
     NULL,                       /* enable/disable ECMP hash configs */
+    NULL,                       /* get mac learnt */
 };
