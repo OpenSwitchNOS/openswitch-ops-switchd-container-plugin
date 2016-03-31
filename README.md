@@ -36,4 +36,5 @@ For answers to common questions, read [FAQ.md](http://www.openswitch.net/documen
 For what has changed since last release, refer to [NEWS]((http://www.openswitch.net/documents/user/news)
 For the current list of contributors and maintainers, refer to [AUTHORS.md](http://git.openswitch.net/cgit/openswitch/ops-switchd-container-plugin/tree/AUTHORS)
 
+
 For general information about OpenSwitch project refer to http://www.openswitch.net.
