@@ -1,0 +1,9 @@
+Code-Review+2: Ricky Charlet <ricky.charlet@hpe.com>
+Code-Review+2: Jin Chong <jin.chu.chong@hpe.com>
+Workflow+1: Jui Shah <jui.d.shah@hpe.com>
+Verified+2: Jui Shah <jui.d.shah@hpe.com>
+Submitted-by: Ricky Charlet <ricky.charlet@hpe.com>
+Submitted-at: Thu, 31 Mar 2016 16:32:32 +0000
+Reviewed-on: https://review.openswitch.net/6316
+Project: openswitch/ops-switchd-container-plugin
+Branch: refs/heads/feature/vxlan
