@@ -1347,7 +1347,7 @@ static struct plugin_extension_interface qos_extension = {
 };
 
 int
-register_extension(void)
+register_qos_extension(void)
 {
     return(register_plugin_extension(&qos_extension));
 }

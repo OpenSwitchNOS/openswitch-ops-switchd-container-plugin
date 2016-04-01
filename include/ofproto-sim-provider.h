@@ -188,6 +188,6 @@ static struct sim_provider_ofport *get_ofp_port(const struct sim_provider_node
 
 extern const struct ofproto_class ofproto_sim_provider_class;
 
-int register_extension(void);
+int register_qos_extension(void);
 
 #endif /* ofproto/ofproto-sim-provider.h */

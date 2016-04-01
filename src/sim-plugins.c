@@ -70,7 +70,7 @@ init(void)
         VLOG_ERR("Failed to start Internal 'ASIC' OVS openvswitch.service");
     }
 
-    register_extension();
+    register_qos_extension();
 }
 
 void
