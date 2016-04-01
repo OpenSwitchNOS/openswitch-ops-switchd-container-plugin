@@ -69,6 +69,8 @@ init(void)
     if (system("systemctl start openvswitch-sim") != 0) {
         VLOG_ERR("Failed to start Internal 'ASIC' OVS openvswitch.service");
     }
+
+    register_extension();
 }
 
 void

@@ -42,6 +42,7 @@ VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 #define MAX_CMD_LEN             2048
 #define SWNS_EXEC               "/sbin/ip netns exec swns"
 
+
 static struct plugin_extension_interface qos_extension;
 
 
@@ -69,7 +70,6 @@ HMAP_INITIALIZER(&all_sim_provider_nodes);
 static void
 init(const struct shash *iface_hints)
 {
-    register_plugin_extension(&qos_extension);
     return;
 }
 
@@ -1345,6 +1345,12 @@ static struct plugin_extension_interface qos_extension = {
     QOS_ASIC_PLUGIN_INTERFACE_MINOR,
     (void *)&qos_asic_plugin
 };
+
+int
+register_extension(void)
+{
+    return(register_plugin_extension(&qos_extension));
+}
 
 #if 0
 static enum ofperr
