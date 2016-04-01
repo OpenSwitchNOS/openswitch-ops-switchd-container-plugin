@@ -17,7 +17,7 @@
 #ifndef __OPS_CLASSIFIER_H_SIM__
 #define __OPS_CLASSIFIER_H_SIM__ 1
 
-#include "ofproto-ops-classifier.h"
+#include "ops-cls-asic-plugin.h"
 #include "ovs/unixctl.h"
 
 /************************************************************************//**
@@ -43,6 +43,11 @@
  * unixctl command
  *****************************************************************************/
 void classifier_sim_debug_init(void);
+
+/**************************************************************************//**
+ * Register OPS_CLS plugin for container platform
+ *****************************************************************************/
+ int register_ops_cls_plugin(void);
 
 /**************************************************************************//**
  * See @ref ofproto_ops_cls_apply

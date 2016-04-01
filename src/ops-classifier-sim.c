@@ -39,9 +39,35 @@
  #include "ovs/unixctl.h"
  #include "ovs/hmap.h"
  #include "ovs/packets.h"
+ #include "plugin-extensions.h"
 
 /** Define logging module */
 VLOG_DEFINE_THIS_MODULE(ops_cls_sim);
+
+/**************************************************************************//**
+ * OPS_CLS plugin interface definition. This is the instance containing all
+ * implementations of ops_cls plugin on container platform.
+ *****************************************************************************/
+static struct  ops_cls_plugin_interface ops_cls_plugin =  {
+    ops_cls_pd_apply,
+    ops_cls_pd_remove,
+    ops_cls_pd_replace,
+    ops_cls_pd_list_update,
+    ops_cls_pd_statistics_get,
+    ops_cls_pd_statistics_clear,
+    ops_cls_pd_statistics_clear_all
+};
+
+/**************************************************************************//**
+ * Ofproto plugin extension for OPS_CLS plugin. Holds the name, version and
+ * plugin interface information.
+ *****************************************************************************/
+static struct plugin_extension_interface ops_cls_extension = {
+    OPS_CLS_ASIC_PLUGIN_INTERFACE_NAME,
+    OPS_CLS_ASIC_PLUGIN_INTERFACE_MAJOR,
+    OPS_CLS_ASIC_PLUGIN_INTERFACE_MINOR,
+    (void *)&ops_cls_plugin
+};
 
 /**************************************************************************//**
  * Structure holding a hashmap of ACLs configured on container platform.
@@ -564,4 +590,9 @@ void classifier_sim_debug_init(void)
                              dump_acls, NULL);
     unixctl_command_register("container/show-acl-bindings", NULL, 0, 1,
                              dump_port_bindings, NULL);
+}
+
+int register_ops_cls_plugin()
+{
+    return (register_plugin_extension(&ops_cls_extension));
 }

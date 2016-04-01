@@ -1237,6 +1237,12 @@ get_netflow_ids(const struct ofproto *ofproto_ OVS_UNUSED,
     return;
 }
 
+void register_asic_plugins(void)
+{
+    /* Register OPS_CLS_PLUGIN */
+    register_ops_cls_plugin();
+}
+
 #if 0
 static enum ofperr
 set_config(struct ofproto *ofproto_,
@@ -1362,13 +1368,5 @@ const struct ofproto_class ofproto_sim_provider_class = {
     NULL,                       /* Get l3 host entry hit bits */
     NULL,                       /* l3 route action - install, update, delete */
     NULL,                       /* enable/disable ECMP globally */
-    NULL,                       /* enable/disable ECMP hash configs */
-
-    ops_cls_pd_apply,           /* ops-classifier functions */
-    ops_cls_pd_remove,
-    ops_cls_pd_replace,
-    ops_cls_pd_list_update,
-    ops_cls_pd_statistics_get,
-    ops_cls_pd_statistics_clear,
-    ops_cls_pd_statistics_clear_all
+    NULL                        /* enable/disable ECMP hash configs */
 };

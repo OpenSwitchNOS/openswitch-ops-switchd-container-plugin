@@ -196,4 +196,6 @@ sim_provider_node_cast(const struct ofproto *ofproto)
 
     return CONTAINER_OF(ofproto, struct sim_provider_node, up);
 }
+
+void register_asic_plugins(void);
 #endif /* ofproto/ofproto-sim-provider.h */

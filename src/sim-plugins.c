@@ -71,6 +71,9 @@ init(void)
         VLOG_ERR("Failed to start Internal 'ASIC' OVS openvswitch.service");
     }
 
+    /* Register ASIC plugins */
+    register_asic_plugins();
+
     /* Initialize classifier debug */
     classifier_sim_debug_init();
 }
