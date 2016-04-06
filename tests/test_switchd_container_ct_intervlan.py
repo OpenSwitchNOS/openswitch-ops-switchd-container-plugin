@@ -206,6 +206,7 @@ class simIntervlanTests(OpsVsiTest):
              "and link states passed ##########\n\n")
 
 
+@pytest.mark.skipif(True, reason="Disabling old tests")
 class Test_switchd_container_intervlan:
 
     def setup_class(cls):

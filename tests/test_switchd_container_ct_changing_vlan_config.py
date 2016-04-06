@@ -213,6 +213,8 @@ class vlanModeTest( OpsVsiTest ):
         info("### Port 1 got deleted from the 'ASIC' OVS and Port 2 got " \
                 "reconfigured with trunks=100 as expected ###\n\n\n")
 
+
+@pytest.mark.skipif(True, reason="Disabling old tests")
 class Test_switchd_container_changing_vlan_config:
 
     def setup_class(cls):
