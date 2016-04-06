@@ -27,5 +27,6 @@
 /* SIM provider API. */
 void netdev_sim_register(void);
 extern int netdev_sim_get_hw_id(struct netdev *netdev);
-
+extern int netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev);
+extern int netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev);
 #endif /* netdev-sim.h */
