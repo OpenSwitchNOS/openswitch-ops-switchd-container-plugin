@@ -327,6 +327,7 @@ class vlanTrunkTest( OpsVsiTest ):
         s1.ovscmd("/usr/bin/ovs-vsctl del-br br0")
         s2.ovscmd("/usr/bin/ovs-vsctl del-br br0")
 
+@pytest.mark.skipif(True, reason="Disabling old tests")
 class Test_switchd_container_vlan_trunk:
 
     def setup_class(cls):

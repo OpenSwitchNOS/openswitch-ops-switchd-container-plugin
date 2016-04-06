@@ -154,7 +154,7 @@ class switchdTest(OpsVsiTest):
         assert "trunk" in port_name, "Port 1 did not get re-added in 'ASIC' " \
             "OVS even after switchd was restarted"
 
-
+@pytest.mark.skipif(True, reason="Disabling old tests")
 class Test_switchd_container_switchd_restartability:
 
     def setup_class(cls):

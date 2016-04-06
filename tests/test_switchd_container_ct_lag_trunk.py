@@ -412,6 +412,7 @@ class lagTrunkTest(OpsVsiTest):
         s2.ovscmd("/usr/bin/ovs-vsctl del-br br0")
 
 
+@pytest.mark.skipif(True, reason="Disabling old tests")
 class Test_switchd_container_lag_trunk:
 
     def setup_class(cls):

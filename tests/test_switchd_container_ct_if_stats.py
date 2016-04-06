@@ -79,6 +79,7 @@ class simIntfStatsTests( OpsVsiTest ):
             info("Stats test Success\n")
 
 
+@pytest.mark.skipif(True, reason="Disabling old tests")
 class Test_switchd_container_intf_stats:
 
   def setup_class(cls):
