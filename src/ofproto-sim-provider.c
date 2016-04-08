@@ -39,8 +39,8 @@
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
 #define MAX_CMD_LEN             2048
+#define MIRROR_OUTPUT_PORT_CMD_MIN_LEN 56
 #define SWNS_EXEC               "/sbin/ip netns exec swns"
-#define MIRROR_MASK_C(X) UINT32_C(X)
 
 static struct sim_provider_ofport *
 sim_provider_ofport_cast(const struct ofport *ofport)
@@ -998,7 +998,7 @@ mirror_set(struct ofproto *ofproto_, void *aux,
 
             idx = mirror_scan(mbridge);
             if (idx < 0) {
-                VLOG_WARN("maximum of %d port mirrors reached, cannot create %s",
+                VLOG_ERR("maximum of %d port mirrors reached, cannot create %s",
                         MAX_MIRRORS, s->name);
                 return EFBIG;
             }
@@ -1071,30 +1071,7 @@ mirror_set(struct ofproto *ofproto_, void *aux,
         mirror->out = out;
         mirror->out_vlan = s->out_vlan;
 
-        /* Update mbundles. */
-        mirror_bit = MIRROR_MASK_C(1) << mirror->idx;
-        HMAP_FOR_EACH (mbundle, hmap_node, &mirror->mbridge->mbundles) {
-            if (hmapx_contains(&mirror->srcs, mbundle)) {
-                mbundle->src_mirrors |= mirror_bit;
-            } else {
-                mbundle->src_mirrors &= ~mirror_bit;
-            }
-
-            if (hmapx_contains(&mirror->dsts, mbundle)) {
-                mbundle->dst_mirrors |= mirror_bit;
-            } else {
-                mbundle->dst_mirrors &= ~mirror_bit;
-            }
-
-            if (mirror->out == mbundle) {
-                mbundle->mirror_out |= mirror_bit;
-            } else {
-                mbundle->mirror_out &= ~mirror_bit;
-            }
-        }
-
         mbridge->has_mirrors = true;
-        mirror_update_dups(mbridge);
 
         /************************************************************/
         /* Build the command to construct the mirror in openvswitch */
@@ -1132,9 +1109,22 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                     s->name, dsts[i]->name);
         }
 
+        /* Check if the buffer has enough space for the remaining command buffer to be added */
+        if ((MAX_CMD_LEN - n) < (MIRROR_OUTPUT_PORT_CMD_MIN_LEN + strlen(out_bundle->name) + strlen(s->name))) {
+            VLOG_ERR("Failed to create mirror '%s'. Command length would exceed buffer size %d", s->name, MAX_CMD_LEN);
+            mirror_destroy(mbridge, mirror->aux);
+            return EMSGSIZE;
+        }
+
         /***********************************/
         /* Set the output port             */
         if (out_bundle) {
+            /* strings in here are 55 chars without the variable parameters
+             * This is captured in MIRROR_OUTPUT_PORT_CMD_MIN_LEN which accounts for
+             * this size NULL.
+             * If you update the command strings below, update the size of
+             * MIROR_OUTPUT_PORT_CMD_MIN_LEN
+             */
         n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
                 "-- --id=@out get port %s ",
                 out_bundle->name);
@@ -1154,6 +1144,10 @@ mirror_set(struct ofproto *ofproto_, void *aux,
         free(srcs);
         free(dsts);
     } else {
+        if (NULL == mirror) {
+            VLOG_ERR("No mirror to delete");
+            return 0;
+        }
         /************************************************************/
         /* Build the command to delete the mirror in openvswitch */
         /************************************************************/
@@ -1220,12 +1214,6 @@ mirror_destroy(struct mbridge *mbridge, void *aux)
 
     VLOG_DBG("%s:Deleting mirror %s", __FUNCTION__, mirror->name);
     i = mirror->idx;
-    mirror_bit = MIRROR_MASK_C(1) << mirror->idx;
-    HMAP_FOR_EACH (mbundle, hmap_node, &mbridge->mbundles) {
-        mbundle->src_mirrors &= ~mirror_bit;
-        mbundle->dst_mirrors &= ~mirror_bit;
-        mbundle->mirror_out &= ~mirror_bit;
-    }
 
     hmapx_destroy(&mirror->srcs);
     hmapx_destroy(&mirror->dsts);
@@ -1236,46 +1224,11 @@ mirror_destroy(struct mbridge *mbridge, void *aux)
 
     mbridge->mirrors[i] = NULL;
 
-    mirror_update_dups(mbridge);
-
     mbridge->has_mirrors = false;
     for (i = 0; i < MAX_MIRRORS; i++) {
         if (mbridge->mirrors[i]) {
             mbridge->has_mirrors = true;
             break;
-        }
-    }
-}
-
-/* Update the 'dup_mirrors' member of each of the mirrors in 'ofproto'. */
-static void
-mirror_update_dups(struct mbridge *mbridge)
-{
-    int i;
-
-    for (i = 0; i < MAX_MIRRORS; i++) {
-        struct mirror *m = mbridge->mirrors[i];
-
-        if (m) {
-            m->dup_mirrors = MIRROR_MASK_C(1) << i;
-        }
-    }
-
-    for (i = 0; i < MAX_MIRRORS; i++) {
-        struct mirror *m1 = mbridge->mirrors[i];
-        int j;
-
-        if (!m1) {
-            continue;
-        }
-
-        for (j = i + 1; j < MAX_MIRRORS; j++) {
-            struct mirror *m2 = mbridge->mirrors[j];
-
-            if (m2 && m1->out == m2->out && m1->out_vlan == m2->out_vlan) {
-                m1->dup_mirrors |= MIRROR_MASK_C(1) << j;
-                m2->dup_mirrors |= m1->dup_mirrors;
-            }
         }
     }
 }
