@@ -239,7 +239,6 @@ static struct mbundle *mbundle_lookup(const struct mbridge *,
 static void mbundle_lookup_multiple(const struct mbridge *, struct ofbundle **,
                                   size_t n_bundles, struct hmapx *mbundles);
 static int mirror_scan(struct mbridge *);
-static void mirror_update_dups(struct mbridge *);
 static void mirror_destroy(struct mbridge *mbridge, void *aux);
 
 extern const struct ofproto_class ofproto_sim_provider_class;
