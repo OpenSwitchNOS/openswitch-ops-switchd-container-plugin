@@ -74,6 +74,7 @@ struct netdev_sim {
     uint64_t sflow_prev_ingress_bytes;
     uint64_t sflow_prev_egress_pkts;
     uint64_t sflow_prev_egress_bytes;
+    bool l3_intf;
 };
 
 struct kernel_l3_stats {
@@ -139,7 +140,7 @@ netdev_sim_construct(struct netdev *netdev_)
     netdev->sflow_prev_ingress_bytes = 0;
     netdev->sflow_prev_egress_pkts = 0;
     netdev->sflow_prev_egress_bytes = 0;
-
+    netdev->l3_intf = false;
     ovs_mutex_unlock(&netdev->mutex);
 
     ovs_mutex_lock(&sim_list_mutex);
@@ -437,11 +438,16 @@ netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
         VLOG_ERR("Failed to get interface statistics for interface %s", dev->linux_intf_name);
         return -1;
     }
-    rc = netdev_sim_get_kernel_l3_stats(dev->linux_intf_name, &dev->stats);
-    if (rc < 0)
+
+    /* For L3 interfaces fetch statistics from iptables*/
+    if(dev->l3_intf)
     {
-        VLOG_ERR("Failed to get L3 interface statistics for interface %s", dev->linux_intf_name);
-        return -1;
+        rc = netdev_sim_get_kernel_l3_stats(dev->linux_intf_name, &dev->stats);
+        if (rc < 0)
+        {
+            VLOG_ERR("Failed to get L3 interface statistics for interface %s", dev->linux_intf_name);
+            return -1;
+        }
     }
 
     netdev_sim_update_sflow_stats(dev);
@@ -951,6 +957,7 @@ netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
     int rc = 0;
+
     rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
     rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "multicast");
     rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "INPUT", "unicast");
@@ -966,6 +973,7 @@ netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
     rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "unicast");
     rc = netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
 
+    dev->l3_intf = true;
     return rc;
 }
 
@@ -989,6 +997,7 @@ netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
     rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "unicast");
     rc = netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
 
+    dev->l3_intf = false;
     return rc;
 }
 
@@ -1173,6 +1182,7 @@ netdev_sim_parse_xtables_l3_stats(const char *if_name,
     fgets(path, sizeof(path)-1, fp);
     if(sscanf(path, "%"PRIu64"%"PRIu64, &packets, &bytes) < 2) {
         VLOG_ERR("Failed to parse %s %s ucast stats for l3 if %s", xtables_cmd, chain, if_name);
+        pclose(fp);
         return 1;
     }
 
@@ -1186,6 +1196,7 @@ netdev_sim_parse_xtables_l3_stats(const char *if_name,
     fgets(path, sizeof(path)-1, fp);
     if(sscanf(path, "%"PRIu64"%"PRIu64, &packets, &bytes) < 2) {
         VLOG_ERR("Failed to parse %s %s mcast stats for l3 if %s", xtables_cmd, chain, if_name);
+        pclose(fp);
         return 1;
     }
 
@@ -1202,6 +1213,7 @@ netdev_sim_parse_xtables_l3_stats(const char *if_name,
     fgets(path, sizeof(path)-1, fp);
     if(sscanf(path, "%"PRIu64"%"PRIu64, &packets, &bytes) < 2) {
         VLOG_ERR("Failed to parse %s %s ucast stats for l3 if %s", xtables_cmd, chain, if_name);
+        pclose(fp);
         return 1;
     }
 
@@ -1214,6 +1226,7 @@ netdev_sim_parse_xtables_l3_stats(const char *if_name,
     fgets(path, sizeof(path)-1, fp);
     if(sscanf(path, "%"PRIu64"%"PRIu64, &packets, &bytes) < 2) {
         VLOG_ERR("Failed to parse %s %s mcast stats for l3 if %s", xtables_cmd, chain, if_name);
+        pclose(fp);
         return 1;
     }
 
