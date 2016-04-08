@@ -388,7 +388,7 @@ bundle_del_port(struct sim_provider_ofport *port)
         enable_port_in_iptables(netdev_get_name(port->up.netdev));
         port->iptable_rules_added = false;
     }
-    netdev_sim_l3stats_xtables_rules_delete(port->up.netdev);
+    netdev_sim_disable_l3(port->up.netdev);
 }
 
 static bool
@@ -796,7 +796,7 @@ found:     ;
     if (ofproto->vrf == true) {
         struct sim_provider_ofport *next_port = NULL, *port = NULL;
         LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
-            netdev_sim_l3stats_xtables_rules_create(port->up.netdev);
+            netdev_sim_enable_l3(port->up.netdev);
         }
         VLOG_DBG("bundle is attached to VRF, Kernel will take care of routing\n");
         return 0;
