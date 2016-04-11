@@ -35,7 +35,6 @@
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
-#include "netdev-sim.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
@@ -388,7 +387,6 @@ bundle_del_port(struct sim_provider_ofport *port)
         enable_port_in_iptables(netdev_get_name(port->up.netdev));
         port->iptable_rules_added = false;
     }
-    netdev_sim_disable_l3(port->up.netdev);
 }
 
 static bool
@@ -663,6 +661,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
            const struct ofproto_bundle_settings *s)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+    const struct ofport *ofport = NULL;
     bool ok = false;
     int ofp_port, i = 0, n = 0;
     char cmd_str[MAX_CMD_LEN];
@@ -794,10 +793,6 @@ found:     ;
      * bundle, then there is no need to do any special handling. Kernel will
      * take care of routing. */
     if (ofproto->vrf == true) {
-        struct sim_provider_ofport *next_port = NULL, *port = NULL;
-        LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
-            netdev_sim_enable_l3(port->up.netdev);
-        }
         VLOG_DBG("bundle is attached to VRF, Kernel will take care of routing\n");
         return 0;
     }
