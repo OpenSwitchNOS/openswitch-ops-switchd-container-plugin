@@ -30,8 +30,6 @@
 /* SIM provider API. */
 void netdev_sim_register(void);
 extern int netdev_sim_get_hw_id(struct netdev *netdev);
-extern int netdev_sim_enable_l3(struct netdev *netdev);
-extern int netdev_sim_disable_l3(struct netdev *netdev);
 extern void netdev_update_sflow_reset(struct netdev *netdev);
 
 #endif /* netdev-sim.h */
