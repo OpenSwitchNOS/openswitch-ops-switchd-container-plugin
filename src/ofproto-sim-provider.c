@@ -972,14 +972,15 @@ mirror_set(struct ofproto *ofproto_, void *aux,
 	struct mbundle *mbundle, *out;
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
     char cmd_str[MAX_CMD_LEN];
-    int i = 0, n = 0;
+    int i = 0, n = 0, retval = 0;
     struct mirror *mirror;
     mirror_mask_t mirror_bit;
     struct mbridge *mbridge;
-    struct ofbundle **srcs, **dsts;
+    struct ofbundle **srcs = NULL, **dsts = NULL;
     struct hmapx srcs_map; /* Contains "struct ofbundle *"s. */
     struct hmapx dsts_map; /* Contains "struct ofbundle *"s. */
     struct ofbundle *out_bundle;
+    bool mirrorModify = false;
 
     VLOG_DBG("%s:Entry()", __FUNCTION__);
 
@@ -1013,6 +1014,9 @@ mirror_set(struct ofproto *ofproto_, void *aux,
             mirror->name = xzalloc(MAX_MIRROR_NAME_LEN);
             strncpy(mirror->name, s->name, MAX_MIRROR_NAME_LEN);
             mirror->name[MAX_MIRROR_NAME_LEN] = '\0';
+        } else {
+            VLOG_DBG("%s:Modifying existing mirror", __FUNCTION__);
+            mirrorModify = true;
         }
 
         if (s->out_bundle) {
@@ -1056,6 +1060,12 @@ mirror_set(struct ofproto *ofproto_, void *aux,
             /* If the configuration has not changed, do nothing. */
             hmapx_destroy(&srcs_map);
             hmapx_destroy(&dsts_map);
+            if (srcs) {
+                free(srcs);
+            }
+            if (dsts) {
+                free(dsts);
+            }
             return 0;
         }
 
@@ -1073,16 +1083,28 @@ mirror_set(struct ofproto *ofproto_, void *aux,
 
         mbridge->has_mirrors = true;
 
+        /* TODO: vLANs aren't supported yet */
+
+        /************************************************************/
+        /* delete the mirror in openvswitch before creating new one */
+        /************************************************************/
+        if (mirrorModify == true) {
+            n = snprintf(cmd_str, MAX_CMD_LEN,
+                         "%s -- --id=@m get mirror %s -- remove bridge bridge_normal mirrors @m",
+                         OVS_VSCTL, mirror->name);
+
+            VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+
+            if (system(cmd_str) != 0) {
+                VLOG_ERR("Failed to delete mirror %s for modify: %s", mirror->name,
+                        strerror(errno));
+                retval = errno;
+            }
+        }
+
         /************************************************************/
         /* Build the command to construct the mirror in openvswitch */
         /************************************************************/
-
-        /* TODO: vLANs aren't supported yet */
-
-        /* TODO: mirror modify not supported yet */
-
-        /***********************************/
-        /* Create a new mirror             */
         n = snprintf(cmd_str, MAX_CMD_LEN,
                      "%s -- --id=@m create mirror name=%s -- add bridge bridge_normal mirrors @m ",
                      OVS_VSCTL, s->name);
@@ -1118,36 +1140,41 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                     "Failed to create mirror '%s'. Command length would exceed buffer size %d",
                     s->name, MAX_CMD_LEN);
             mirror_destroy(mbridge, mirror->aux);
-            return EMSGSIZE;
+
+            retval = EMSGSIZE;
+        } else {
+            /***********************************/
+            /* Set the output port             */
+            if (out_bundle) {
+                /* strings in here are 55 chars without the variable parameters
+                 * This is captured in MIRROR_OUTPUT_PORT_CMD_MIN_LEN which accounts for
+                 * this size NULL.
+                 * If you update the command strings below, update the size of
+                 * MIROR_OUTPUT_PORT_CMD_MIN_LEN
+                 */
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                "-- --id=@out get port %s ", out_bundle->name);
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                "-- set mirror %s output-port=@out ", s->name);
+            }
+
+            VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+
+            if (system(cmd_str) != 0) {
+                VLOG_ERR("Failed to create mirror %s. %s", s->name,
+                strerror(errno));
+                mirror_destroy(mbridge, mirror->aux);
+                retval = errno;
+            }
+            else {
+                /* regardless of what errors we had before, if the create succeeds we'll go with it */
+                retval = 0;
+            }
         }
 
-        /***********************************/
-        /* Set the output port             */
-        if (out_bundle) {
-            /* strings in here are 55 chars without the variable parameters
-             * This is captured in MIRROR_OUTPUT_PORT_CMD_MIN_LEN which accounts for
-             * this size NULL.
-             * If you update the command strings below, update the size of
-             * MIROR_OUTPUT_PORT_CMD_MIN_LEN
-             */
-            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    "-- --id=@out get port %s ", out_bundle->name);
-            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    "-- set mirror %s output-port=@out ", s->name);
-        }
-
-        VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
-
-        if (system(cmd_str) != 0) {
-            VLOG_ERR("Failed to create mirror %s. %s", s->name,
-                    strerror(errno));
-            mirror_destroy(mbridge, mirror->aux);
-            return errno;
-        }
-
-        free(srcs);
-        free(dsts);
     } else {
+        /* This is a mirror delete */
+
         if (mirror == NULL) {
             VLOG_ERR("No mirror to delete");
             return 0;
@@ -1164,14 +1191,22 @@ mirror_set(struct ofproto *ofproto_, void *aux,
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to delete mirror %s. %s", mirror->name,
                     strerror(errno));
-            return errno;
+            retval = errno;
         }
 
         /* Now we can delete our copy of the mirror config */
         mirror_destroy(mbridge, aux);
     }
 
-    return 0;
+    /* Clean up from create/modify */
+    if (srcs) {
+        free(srcs);
+    }
+    if (dsts) {
+        free(dsts);
+    }
+
+    return retval;
 }
 
 static struct mirror *
