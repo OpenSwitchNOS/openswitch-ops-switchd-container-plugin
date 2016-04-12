@@ -1101,36 +1101,57 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                 retval = errno;
             }
         }
-
         /************************************************************/
         /* Build the command to construct the mirror in openvswitch */
         /************************************************************/
         n = snprintf(cmd_str, MAX_CMD_LEN,
-                     "%s -- --id=@m create mirror name=%s -- add bridge bridge_normal mirrors @m ",
+                     "%s -- --id=@m create mirror name=%s -- add bridge bridge_normal mirrors @m",
                      OVS_VSCTL, s->name);
 
         /***********************************/
         /* Add the ingress ports           */
-        for (i = 0; i < s->n_srcs; i++) {
-            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    "-- --id=@srx%s get port %s ", srcs[i]->name,
+        if (s->n_srcs > 0) {
+            for (i = 0; i < s->n_srcs; i++) {
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    " -- --id=@srx%s get port %s", srcs[i]->name,
                     srcs[i]->name);
-            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    "-- set mirror %s select-src-port=@srx%s ", s->name,
-                    srcs[i]->name);
-        }
+            }
 
+            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                " -- set mirror %s select-src-port=", s->name);
+
+            for (i = 0; i < s->n_srcs; i++) {
+                if (i > 0 && (MAX_CMD_LEN - n > 0)) {
+                    /* Add the comma required to list multiple ports */
+                    cmd_str[n] = ',';
+                    n++;
+                }
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    "@srx%s", srcs[i]->name);
+            }
+        }
         /***********************************/
         /* Add the egress ports            */
-        for (i = 0; i < s->n_dsts; i++) {
-            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    "-- --id=@stx%s get port %s ", dsts[i]->name,
+        if (s->n_dsts > 0) {
+            for (i = 0; i < s->n_dsts; i++) {
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    " -- --id=@stx%s get port %s", dsts[i]->name,
                     dsts[i]->name);
-            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    "-- set mirror %s select-dst-port=@stx%s ", s->name,
-                    dsts[i]->name);
-        }
+            }
 
+            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                " -- set mirror %s select-dst-port=", s->name);
+
+            for (i = 0; i < s->n_dsts; i++) {
+                if (i > 0 && (MAX_CMD_LEN - n > 0)) {
+                    /* Add the comma required to list multiple ports */
+                    cmd_str[n] = ',';
+                    n++;
+                }
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    "@stx%s", dsts[i]->name);
+            }
+        }
         /* Check if the buffer has enough space for the remaining command
          * buffer to be added */
         if ((MAX_CMD_LEN - n)
@@ -1153,9 +1174,9 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                  * MIROR_OUTPUT_PORT_CMD_MIN_LEN
                  */
                 n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                "-- --id=@out get port %s ", out_bundle->name);
+                " -- --id=@out get port %s", out_bundle->name);
                 n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                "-- set mirror %s output-port=@out ", s->name);
+                " -- set mirror %s output-port=@out ", s->name);
             }
 
             VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
