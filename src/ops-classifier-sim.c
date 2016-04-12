@@ -55,7 +55,8 @@ static struct  ops_cls_plugin_interface ops_cls_plugin =  {
     ops_cls_pd_list_update,
     ops_cls_pd_statistics_get,
     ops_cls_pd_statistics_clear,
-    ops_cls_pd_statistics_clear_all
+    ops_cls_pd_statistics_clear_all,
+    NULL
 };
 
 /**************************************************************************//**
