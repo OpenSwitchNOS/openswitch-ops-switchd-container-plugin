@@ -1259,6 +1259,9 @@ sflow_cfg_clear(struct sim_sflow_cfg *sim_cfg)
         if (sim_cfg->agent_device) {
             free(sim_cfg->agent_device);
         }
+        if (sim_cfg->agent_ip) {
+            free(sim_cfg->agent_ip);
+        }
         sim_cfg->set = false;
     }
 }
@@ -1323,7 +1326,8 @@ sflow_cfg_equal(struct ofproto_sflow_options *ofproto_cfg,
             && (ofproto_cfg->header_len == sim_cfg->header_len)
             && (ofproto_cfg->max_datagram == sim_cfg->max_datagram)
             && (string_is_equal(ofproto_cfg->agent_device,
-                                sim_cfg->agent_device)));
+                                sim_cfg->agent_device))
+            && (string_is_equal(ofproto_cfg->agent_ip, sim_cfg->agent_ip)));
 }
 
 static void
@@ -1341,7 +1345,12 @@ sflow_cfg_set(struct ofproto_sflow_options *ofproto_cfg,
     sset_clone(&sim_cfg->targets, &ofproto_cfg->targets);
     sim_cfg->agent_device = ofproto_cfg->agent_device ?
                             strdup(ofproto_cfg->agent_device) : NULL;
-
+    if (strcmp(sim_cfg->agent_ip , ofproto_cfg->agent_ip) == 0) {
+        strcpy(sim_cfg->agent_ip, ofproto_cfg->agent_ip);
+    }
+    else {
+        strcpy(sim_cfg->agent_ip, NULL);
+    }
     sim_cfg->set = true;
 }
 
