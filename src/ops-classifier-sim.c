@@ -537,7 +537,7 @@ ops_cls_pd_list_update(struct ops_cls_list              *list,
     VLOG_DBG("%s called\n", __func__);
 
     acl_create_or_update_entry(list);
-    status->status_code = OPS_CLS_PD_STATUS_SUCCESS;
+    status->status_code = OPS_CLS_STATUS_SUCCESS;
     status->entry_id = 0;
     VLOG_DBG("ACL %s updated\n", list->list_name);
     return 0;
