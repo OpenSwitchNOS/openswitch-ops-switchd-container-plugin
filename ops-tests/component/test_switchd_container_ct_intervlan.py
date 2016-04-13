@@ -39,6 +39,7 @@ ops1:if02 -- hs2:if01
 
 
 @mark.platform_incompatible(['ostl'])
+@mark.skipif(True, reason="skipping test case due to stability issues in CIT")
 def test_switchd_container_ct_intervlan(topology, step):
     ops1 = topology.get("ops1")
     hs1 = topology.get("hs1")

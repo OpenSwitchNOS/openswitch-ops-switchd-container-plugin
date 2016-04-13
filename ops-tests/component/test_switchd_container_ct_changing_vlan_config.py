@@ -34,6 +34,7 @@ TOPOLOGY = """
 
 
 @mark.platform_incompatible(['ostl'])
+@mark.skipif(True, reason="skipping test case due to stability issues in CIT")
 def test_switchd_container_ct_changing_vlan_config(topology, step):
     ops1 = topology.get("ops1")
     assert ops1 is not None

@@ -69,6 +69,7 @@ struct netdev_sim {
     bool pause_rx;
 
     /* used for maintaining L3 sflow stats */
+    bool     sflow_stats_enabled;
     uint32_t sflow_resets;
     uint64_t sflow_prev_ingress_pkts;
     uint64_t sflow_prev_ingress_bytes;
@@ -125,6 +126,7 @@ netdev_sim_construct(struct netdev *netdev_)
     netdev->flags = 0;
     netdev->link_state = 0;
     netdev->sflow_resets = 0;
+    netdev->sflow_stats_enabled = false;
     netdev->sflow_prev_ingress_pkts = 0;
     netdev->sflow_prev_ingress_bytes = 0;
     netdev->sflow_prev_egress_pkts = 0;
@@ -370,8 +372,12 @@ netdev_sim_update_sflow_stats(struct netdev_sim *netdev)
     uint64_t in_pkts = 0, in_bytes = 0;
     uint64_t out_pkts = 0, out_bytes = 0;
 
-    netdev_sim_get_iptable_stats(netdev->up.name, true, &in_pkts, &in_bytes);
-    netdev_sim_get_iptable_stats(netdev->up.name, false, &out_pkts, &out_bytes);
+    if (netdev->sflow_stats_enabled) {
+        netdev_sim_get_iptable_stats(netdev->up.name, true,
+                                     &in_pkts, &in_bytes);
+        netdev_sim_get_iptable_stats(netdev->up.name, false,
+                                     &out_pkts, &out_bytes);
+    }
 
     ovs_mutex_lock(&netdev->mutex);
 
@@ -961,10 +967,19 @@ netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats)
  * before adding to the db.
  */
 void
-netdev_update_sflow_reset(struct netdev *netdev_)
+netdev_sflow_reset(struct netdev *netdev_)
 {
     struct netdev_sim *netdev = netdev_sim_cast(netdev_);
     ovs_mutex_lock(&netdev->mutex);
     netdev->sflow_resets++;
+    ovs_mutex_unlock(&netdev->mutex);
+}
+
+void
+netdev_sflow_stats_enable(struct netdev *netdev_, bool enabled)
+{
+    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
+    ovs_mutex_lock(&netdev->mutex);
+    netdev->sflow_stats_enabled = enabled;
     ovs_mutex_unlock(&netdev->mutex);
 }
