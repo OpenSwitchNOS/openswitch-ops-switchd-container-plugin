@@ -387,6 +387,7 @@ bundle_del_port(struct sim_provider_ofport *port)
         enable_port_in_iptables(netdev_get_name(port->up.netdev));
         port->iptable_rules_added = false;
     }
+    netdev_sim_l3stats_xtables_rules_delete(port->up.netdev);
 }
 
 static bool
@@ -793,6 +794,10 @@ found:     ;
      * bundle, then there is no need to do any special handling. Kernel will
      * take care of routing. */
     if (ofproto->vrf == true) {
+        struct sim_provider_ofport *next_port = NULL, *port = NULL;
+        LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+            netdev_sim_l3stats_xtables_rules_create(port->up.netdev);
+        }
         VLOG_DBG("bundle is attached to VRF, Kernel will take care of routing\n");
         return 0;
     }
@@ -1432,17 +1437,25 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
     return 0;
 }
 
+/* indicate to netdev that sflow is being reset on this bundle */
 static void
-sflow_update_port(struct ofbundle *bundle)
+sflow_port_reset(struct ofbundle *bundle)
 {
     struct sim_provider_ofport *port = NULL, *next_port = NULL;
 
     LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
-        /* for sflow assume only one interface per port/bundle. */
-        netdev_update_sflow_reset(port->up.netdev);
-        break;
+        netdev_sflow_reset(port->up.netdev);
     }
+}
 
+static void
+sflow_port_stats_enable(struct ofbundle *bundle, bool enabled)
+{
+    struct sim_provider_ofport *port = NULL, *next_port = NULL;
+
+    LIST_FOR_EACH_SAFE(port, next_port, bundle_node, &bundle->ports) {
+        netdev_sflow_stats_enable(port->up.netdev, enabled);
+    }
 }
 
 static void
@@ -1460,7 +1473,8 @@ sflow_iptables_reconfigure(struct sim_provider_node *ofproto,
             if (!sset_contains(&sim_cfg->ports, bundle->name)) {
                 VLOG_DBG("adding sflow iptables rule for port = '%s'\n",
                          bundle->name);
-                sflow_update_port(bundle);
+                sflow_port_reset(bundle);
+                sflow_port_stats_enable(bundle, true);
                 sflow_iptable_add(sim_cfg, bundle->name);
             }
         }
@@ -1480,6 +1494,7 @@ sflow_iptables_reconfigure(struct sim_provider_node *ofproto,
         if (!port_found || !bundle->is_sflow_enabled) {
             VLOG_DBG("deleting sflow iptables rule for port = '%s'\n",
                      port_name);
+            sflow_port_stats_enable(bundle, false);
             sflow_iptable_del(sim_cfg, port_name);
         }
     }
