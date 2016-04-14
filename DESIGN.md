@@ -3,6 +3,7 @@
 
 ## Contents
 
+
 - [Description](#description)
 - [Responsibilities](#responsibilities)
 - [Design choices](#design-choices)
