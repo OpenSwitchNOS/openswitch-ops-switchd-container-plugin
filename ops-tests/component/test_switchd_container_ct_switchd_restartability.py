@@ -38,6 +38,7 @@ def test_switchd_container_ct_switchd_restartability(topology, step):
     ops1 = topology.get("ops1")
     assert ops1 is not None
 
+    ops1._shells["bash"]._timeout = 120
     step("Step 1- Adding VLAN100 and ports 1, 2, 3 to default bridge")
     ops1("add-vlan bridge_normal 100 admin=up", shell="vsctl")
     ops1("add-port bridge_normal 1", shell="vsctl")
