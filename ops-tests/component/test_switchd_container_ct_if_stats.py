@@ -71,7 +71,7 @@ def test_switchd_container_ct_if_stats(topology, step):
     ping = hs1.libs.ping.ping(6, '200.0.0.2')
     assert ping["received"] >= 4
 
-    sleep(5)
+    sleep(30)
 
     out = ops1("do show interface {int}".format(int=ops1.ports["if01"]))
     for line in out.splitlines():
