@@ -387,6 +387,10 @@ bundle_del_port(struct sim_provider_ofport *port)
         enable_port_in_iptables(netdev_get_name(port->up.netdev));
         port->iptable_rules_added = false;
     }
+
+    if (bundle->ofproto->vrf) {
+        netdev_sim_l3stats_xtables_rules_delete(port->up.netdev);
+    }
 }
 
 static bool
@@ -398,7 +402,6 @@ bundle_add_port(struct ofbundle *bundle, ofp_port_t ofp_port)
     if (!port) {
         return false;
     }
-
     if (port->bundle != bundle) {
         if (port->bundle) {
             bundle_remove(&port->up);
@@ -406,6 +409,10 @@ bundle_add_port(struct ofbundle *bundle, ofp_port_t ofp_port)
 
         port->bundle = bundle;
         list_push_back(&bundle->ports, &port->bundle_node);
+        if(bundle->ofproto->vrf) {
+            netdev_sim_l3stats_xtables_rules_create(port->up.netdev);
+        }
+
     }
 
     return true;
