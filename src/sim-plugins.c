@@ -28,6 +28,8 @@
 #define netdev_register libovs_sim_plugin_LTX_netdev_register
 #define ofproto_register libovs_sim_plugin_LTX_ofproto_register
 
+#define MAX_CMD_LEN             50
+
 VLOG_DEFINE_THIS_MODULE(sim_plugin);
 
 void
