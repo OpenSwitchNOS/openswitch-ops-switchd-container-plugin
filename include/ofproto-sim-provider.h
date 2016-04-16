@@ -125,6 +125,7 @@ struct sim_sflow_cfg {
     char *agent_device;        /* Agent Interface (IP address that is used
                                   in sFlow datagram) */
     bool set;
+    bool disabled;             /* sFlow is disabled */
 };
 
 struct sim_provider_node {
