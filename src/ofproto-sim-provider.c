@@ -1279,6 +1279,11 @@ sflow_disable(struct sim_provider_node *ofproto,
     int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
 
+    if (sim_cfg->disabled) {
+        VLOG_DBG("sFlow is already disabled");
+        return;
+    }
+
     sflow_cfg_clear(sim_cfg);
 
     if (ofproto->vrf) {
@@ -1300,7 +1305,7 @@ sflow_disable(struct sim_provider_node *ofproto,
                       ofproto->up.name, cmd_str, strerror(errno));
         }
     }
-
+    sim_cfg->disabled = true;
 }
 
 static bool
@@ -1666,6 +1671,7 @@ set_sflow(struct ofproto *ofproto_,
 
     sflow_cfg_clear(sim_cfg);
     sflow_cfg_set((struct ofproto_sflow_options *)ofproto_cfg, sim_cfg);
+    sim_cfg->disabled = false;
 
     if (ofproto->vrf) { /* for L3 interfaces, use host sflow agent */
         sflow_iptable_del_all();
