@@ -33,6 +33,7 @@
 #include "unaligned.h"
 #include "vlan-bitmap.h"
 #include "openvswitch/vlog.h"
+#include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
 
@@ -41,6 +42,12 @@ VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 #define MAX_CMD_LEN             2048
 #define MIRROR_OUTPUT_PORT_CMD_MIN_LEN 56
 #define SWNS_EXEC               "/sbin/ip netns exec swns"
+
+/* This struct needs to move to ofproto.h after Dill */
+struct ofproto_mirror_bundle {
+    struct ofproto *ofproto;
+    void           *aux;
+};
 
 static struct sim_provider_ofport *
 sim_provider_ofport_cast(const struct ofport *ofport)
@@ -287,6 +294,10 @@ destruct(struct ofproto *ofproto_ OVS_UNUSED)
 
     ovs_mutex_destroy(&ofproto->stats_mutex);
     ovs_mutex_destroy(&ofproto->vsp_mutex);
+
+    if (ofproto->mbridge) {
+        free(ofproto->mbridge);
+    }
 
     return;
 }
@@ -969,14 +980,16 @@ static int
 mirror_set(struct ofproto *ofproto_, void *aux,
                       const struct ofproto_mirror_settings *s)
 {
-	struct mbundle *mbundle, *out;
+    struct mbundle *mbundle, *out;
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
     char cmd_str[MAX_CMD_LEN];
     int i = 0, n = 0, retval = 0;
     struct mirror *mirror;
     mirror_mask_t mirror_bit;
     struct mbridge *mbridge;
-    struct ofbundle **srcs = NULL, **dsts = NULL;
+    struct ofproto_mirror_bundle **srcs, **dsts;
+    struct ofproto_mirror_bundle *outmb;
+    struct ofbundle **bndlSrcs = NULL, **bndlDsts = NULL;
     struct hmapx srcs_map; /* Contains "struct ofbundle *"s. */
     struct hmapx dsts_map; /* Contains "struct ofbundle *"s. */
     struct ofbundle *out_bundle;
@@ -1019,8 +1032,16 @@ mirror_set(struct ofproto *ofproto_, void *aux,
             mirrorModify = true;
         }
 
+        srcs = (struct ofproto_mirror_bundle **)(s->srcs);
+        dsts = (struct ofproto_mirror_bundle **)(s->dsts);
+
         if (s->out_bundle) {
-            out_bundle = bundle_lookup(ofproto, s->out_bundle);
+            outmb = (struct ofproto_mirror_bundle *)(s->out_bundle);
+            if (ofproto_ != outmb->ofproto) {
+                mirror_destroy(mbridge, mirror->aux);
+                return EINVAL;
+            }
+            out_bundle = bundle_lookup(sim_provider_node_cast(outmb->ofproto), outmb->aux);
             /* Get the new configuration. */
             if (out_bundle) {
                 VLOG_DBG("%s:Mirror output %s", __FUNCTION__,
@@ -1030,7 +1051,6 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                     mirror_destroy(mbridge, mirror->aux);
                     return EINVAL;
                 }
-                /* s->out_vlan = -1;*/
             } else {
                 out = NULL;
             }
@@ -1039,18 +1059,33 @@ mirror_set(struct ofproto *ofproto_, void *aux,
         }
 
         if (s->n_srcs > 0) {
-            srcs = xmalloc(s->n_srcs * sizeof *srcs);
+            bndlSrcs = xmalloc(s->n_srcs * sizeof *bndlSrcs);
             for (i = 0; i < s->n_srcs; i++) {
-                srcs[i] = bundle_lookup(ofproto, s->srcs[i]);
+                if (ofproto_ != srcs[i]->ofproto)
+                {
+                    free(bndlSrcs);
+                    mirror_destroy(mbridge, mirror->aux);
+                    return EINVAL;
+                }
+                bndlSrcs[i] = bundle_lookup(sim_provider_node_cast(srcs[i]->ofproto), srcs[i]->aux);
             }
-            mbundle_lookup_multiple(mbridge, srcs, s->n_srcs, &srcs_map);
+            mbundle_lookup_multiple(mbridge, bndlSrcs, s->n_srcs, &srcs_map);
         }
         if (s->n_dsts > 0) {
-            dsts = xmalloc(s->n_dsts * sizeof *dsts);
+            bndlDsts = xmalloc(s->n_dsts * sizeof *bndlDsts);
             for (i = 0; i < s->n_dsts; i++) {
-                dsts[i] = bundle_lookup(ofproto, s->dsts[i]);
+                if (ofproto_ != dsts[i]->ofproto)
+                {
+                    if (bndlSrcs) {
+                        free(bndlSrcs);
+                    }
+                    free(bndlDsts);
+                    mirror_destroy(mbridge, mirror->aux);
+                    return EINVAL;
+                }
+                bndlDsts[i] = bundle_lookup(sim_provider_node_cast(dsts[i]->ofproto), dsts[i]->aux);
             }
-            mbundle_lookup_multiple(mbridge, dsts, s->n_dsts, &dsts_map);
+            mbundle_lookup_multiple(mbridge, bndlDsts, s->n_dsts, &dsts_map);
         }
 
         if (hmapx_equals(&srcs_map, &mirror->srcs)
@@ -1060,11 +1095,11 @@ mirror_set(struct ofproto *ofproto_, void *aux,
             /* If the configuration has not changed, do nothing. */
             hmapx_destroy(&srcs_map);
             hmapx_destroy(&dsts_map);
-            if (srcs) {
-                free(srcs);
+            if (bndlSrcs) {
+                free(bndlSrcs);
             }
-            if (dsts) {
-                free(dsts);
+            if (bndlDsts) {
+                free(bndlDsts);
             }
             return 0;
         }
@@ -1113,8 +1148,8 @@ mirror_set(struct ofproto *ofproto_, void *aux,
         if (s->n_srcs > 0) {
             for (i = 0; i < s->n_srcs; i++) {
                 n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    " -- --id=@srx%s get port %s", srcs[i]->name,
-                    srcs[i]->name);
+                    " -- --id=@srx%s get port %s", bndlSrcs[i]->name,
+                    bndlSrcs[i]->name);
             }
 
             n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
@@ -1127,7 +1162,7 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                     n++;
                 }
                 n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    "@srx%s", srcs[i]->name);
+                    "@srx%s", bndlSrcs[i]->name);
             }
         }
         /***********************************/
@@ -1135,8 +1170,8 @@ mirror_set(struct ofproto *ofproto_, void *aux,
         if (s->n_dsts > 0) {
             for (i = 0; i < s->n_dsts; i++) {
                 n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    " -- --id=@stx%s get port %s", dsts[i]->name,
-                    dsts[i]->name);
+                    " -- --id=@stx%s get port %s", bndlDsts[i]->name,
+                    bndlDsts[i]->name);
             }
 
             n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
@@ -1149,7 +1184,7 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                     n++;
                 }
                 n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
-                    "@stx%s", dsts[i]->name);
+                    "@stx%s", bndlDsts[i]->name);
             }
         }
         /* Check if the buffer has enough space for the remaining command
@@ -1220,11 +1255,11 @@ mirror_set(struct ofproto *ofproto_, void *aux,
     }
 
     /* Clean up from create/modify */
-    if (srcs) {
-        free(srcs);
+    if (bndlSrcs) {
+        free(bndlSrcs);
     }
-    if (dsts) {
-        free(dsts);
+    if (bndlDsts) {
+        free(bndlDsts);
     }
 
     return retval;
