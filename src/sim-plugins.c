@@ -20,6 +20,7 @@
 #include "ofproto/ofproto-provider.h"
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
+#include "sim-copp-plugin.h"
 
 #define init libovs_sim_plugin_LTX_init
 #define run libovs_sim_plugin_LTX_run
@@ -69,6 +70,7 @@ init(void)
     if (system("systemctl start openvswitch-sim") != 0) {
         VLOG_ERR("Failed to start Internal 'ASIC' OVS openvswitch.service");
     }
+    sim_copp_init();
 }
 
 void
