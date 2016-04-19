@@ -42,7 +42,7 @@ include_directories(${CMAKE_SOURCE_DIR} ${OVSCOMMON_INCLUDE_DIRS} ${PROJECT_SOUR
 
 add_library (ovs_sim_plugin SHARED ${SOURCES})
 
-target_link_libraries (ovs_sim_plugin ${OVSCOMMON_LIBRARIES})
+target_link_libraries (ovs_sim_plugin ${OVSCOMMON_LIBRARIES} -lsupportability)
 
 ###
 ### Installation
