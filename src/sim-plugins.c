@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2015 Hewlett Packard Enterprise Development LP
+ *  (c) Copyright 2015-2016 Hewlett Packard Enterprise Development LP
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may
  *  not use this file except in compliance with the License. You may obtain
@@ -21,6 +21,7 @@
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
 #include "eventlog.h"
+#include "sim-copp-plugin.h"
 
 #define init libovs_sim_plugin_LTX_init
 #define run libovs_sim_plugin_LTX_run
@@ -78,6 +79,7 @@ init(void)
     }
 
     register_qos_extension();
+    sim_copp_init();
 }
 
 void
