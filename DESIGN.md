@@ -126,6 +126,7 @@ struct netdev_sim {
 * `netdev_sim_get_etheraddr`      - Reports a MAC address.
 * `netdev_sim_get_carrier`        - Reports link state.
 * `netdev_sim_get_stats`          - Reports interface stats.
+* `netdev_sim_dump_queue_stats`   - Reports simulated QOS queue stats.
 * `netdev_sim_get_features`       - Reports interface features.
 * `netdev_sim_update_flags`       - Updates interface flags.
 

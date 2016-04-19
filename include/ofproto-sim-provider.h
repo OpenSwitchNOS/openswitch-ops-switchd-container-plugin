@@ -125,6 +125,7 @@ struct sim_sflow_cfg {
     char *agent_device;        /* Agent Interface (IP address that is used
                                   in sFlow datagram) */
     bool set;
+    bool disabled;             /* sFlow is disabled */
 };
 
 struct sim_provider_node {
@@ -206,4 +207,7 @@ static struct sim_provider_ofport *get_ofp_port(const struct sim_provider_node
                                                 *ofproto, ofp_port_t ofp_port);
 
 extern const struct ofproto_class ofproto_sim_provider_class;
+
+int register_qos_extension(void);
+
 #endif /* ofproto/ofproto-sim-provider.h */

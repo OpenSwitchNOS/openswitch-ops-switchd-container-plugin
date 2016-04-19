@@ -20,6 +20,7 @@
 #include "ofproto/ofproto-provider.h"
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
+#include "eventlog.h"
 
 #define init libovs_sim_plugin_LTX_init
 #define run libovs_sim_plugin_LTX_run
@@ -33,7 +34,15 @@ VLOG_DEFINE_THIS_MODULE(sim_plugin);
 void
 init(void)
 {
+    int retval;
     char cmd_str[MAX_CMD_LEN];
+
+    /* Event log initialization for sFlow */
+    retval = event_log_init("SFLOW");
+    if(retval < 0) {
+        VLOG_ERR("Event log initialization failed for SFLOW");
+    }
+
     memset(cmd_str, 0, sizeof(cmd_str));
     /* Cleaning up the Internal "ASIC" OVS everytime ops-switchd daemon is
     * started or restarted or killed to keep the "ASIC" OVS database in sync
@@ -67,6 +76,8 @@ init(void)
     if (system("systemctl start openvswitch-sim") != 0) {
         VLOG_ERR("Failed to start Internal 'ASIC' OVS openvswitch.service");
     }
+
+    register_qos_extension();
 }
 
 void
