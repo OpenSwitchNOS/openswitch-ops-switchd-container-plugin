@@ -24,7 +24,8 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99 -Werror")
 ### Define sources
 ###
 
-set (SOURCES ${SRC_DIR}/sim-plugins.c ${SRC_DIR}/netdev-sim.c ${SRC_DIR}/ofproto-sim-provider.c)
+set (SOURCES ${SRC_DIR}/sim-plugins.c ${SRC_DIR}/netdev-sim.c
+${SRC_DIR}/ofproto-sim-provider.c ${SRC_DIR}/sim-copp-plugin.c)
 
 ###
 ### Define and locate needed libraries and includes
