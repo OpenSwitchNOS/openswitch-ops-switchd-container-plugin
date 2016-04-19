@@ -21,6 +21,7 @@
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
 #include "eventlog.h"
+#include "sim-copp-plugin.h"
 
 #define init libovs_sim_plugin_LTX_init
 #define run libovs_sim_plugin_LTX_run
@@ -78,6 +79,7 @@ init(void)
     }
 
     register_qos_extension();
+    sim_copp_init();
 }
 
 void
