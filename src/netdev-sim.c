@@ -32,6 +32,7 @@
 #include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <net/if.h>
+#include <netinet/ether.h>
 
 #include "openswitch-idl.h"
 #include "openvswitch/vlog.h"
@@ -190,6 +191,7 @@ netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
     const char *max_speed = smap_get(args, INTERFACE_HW_INTF_INFO_MAP_MAX_SPEED);
     const char *mac_addr = smap_get(args, INTERFACE_HW_INTF_INFO_MAP_MAC_ADDR);
     char cmd[1024];
+    struct ether_addr *ether_mac = NULL;
 
     ovs_mutex_lock(&netdev->mutex);
 
@@ -202,6 +204,10 @@ netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
 
     if(mac_addr != NULL) {
         strncpy(netdev->hw_addr_str, mac_addr, sizeof(netdev->hw_addr_str));
+        ether_mac = ether_aton(mac_addr);
+        if (ether_mac != NULL) {
+            memcpy(netdev->hwaddr, ether_mac, ETH_ALEN);
+        }
     } else {
         VLOG_ERR("Invalid mac address %s", mac_addr);
     }
