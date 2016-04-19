@@ -35,6 +35,7 @@
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
+#include "eventlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
@@ -1269,6 +1270,8 @@ sflow_iptable_del_all(void)
     /* delete all sflow related iptable rules in the system */
     if ((system("iptables -S | sed \"/SFLOW/s/-A/iptables -D/e\"")) != 0) {
         VLOG_ERR("Failed to delete all iptable rules, rc=%s", strerror(errno));
+        log_event("SFLOW_IPTABLES_DEL_ALL_FAILURE",
+                  EV_KV("error", "%s", strerror(errno)));
     }
 }
 
@@ -1286,6 +1289,9 @@ sflow_disable(struct sim_provider_node *ofproto,
         /* stop host sflow agent */
         if ((system("systemctl stop host-sflow")) != 0) {
             VLOG_ERR("Failed to stop host sflow agent, rc=%s", strerror(errno));
+            log_event("SFLOW_HSFLOWD_FAILURE",
+                      EV_KV("operation", "%s", "stop"),
+                      EV_KV("error", "%s", strerror(errno)));
         }
     } else {
         /* remove the sflow config from bridge */
@@ -1298,6 +1304,10 @@ sflow_disable(struct sim_provider_node *ofproto,
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to remove sflow config from bridge %s. cmd='%s', rc=%s",
                       ofproto->up.name, cmd_str, strerror(errno));
+            log_event("SFLOW_SIM_CFG_FAILURE",
+                      EV_KV("operation", "%s", "remove"),
+                      EV_KV("bridge", "%s", ofproto->up.name),
+                      EV_KV("error", "%s", strerror(errno)));
         }
     }
 
@@ -1357,6 +1367,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "INPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1366,6 +1381,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "OUTPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1375,6 +1395,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1384,6 +1409,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     return 0;
@@ -1400,6 +1430,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "INPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1409,6 +1444,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "OUTPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1418,6 +1458,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1427,6 +1472,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     return 0;
@@ -1551,6 +1601,10 @@ sflow_ovs_configure(struct sim_provider_node *ofproto,
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to set sflow on bridge '%s'. cmd='%s', rc=%s",
                  ofproto->up.name, cmd_str, strerror(errno));
+        log_event("SFLOW_SIM_CFG_FAILURE",
+                  EV_KV("operation", "%s", "set"),
+                  EV_KV("bridge", "%s", ofproto->up.name),
+                  EV_KV("error", "%s", strerror(errno)));
     }
 }
 
@@ -1568,6 +1622,10 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     if (!fp) {
         VLOG_ERR("Failed to open host sflow cfg file '%s'. rc='%s'",
                  HOSTSFLOW_CFG_FILENAME, strerror(errno));
+        log_event("SFLOW_HSFLOWD_CFG_FILE_FAILURE",
+                  EV_KV("operation", "%s", "open"),
+                  EV_KV("file", "%s", HOSTSFLOW_CFG_FILENAME),
+                  EV_KV("error", "%s", strerror(errno)));
         return;
     }
     /* write to the config file */
@@ -1609,12 +1667,19 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     if ((fprintf(fp, "%s", cmd_str)) < 0) {
         VLOG_ERR("Failed to write to host sflow cfg file '%s'. rc='%s'",
                  HOSTSFLOW_CFG_FILENAME, strerror(errno));
+        log_event("SFLOW_HSFLOWD_CFG_FILE_FAILURE",
+                  EV_KV("operation", "%s", "write"),
+                  EV_KV("file", "%s", HOSTSFLOW_CFG_FILENAME),
+                  EV_KV("error", "%s", strerror(errno)));
     }
     fclose(fp);
 
     /* restart host sflow agent */
     if ((system("systemctl restart host-sflow")) != 0) {
         VLOG_ERR("Failed to restart host sflow agent, rc=%s", strerror(errno));
+        log_event("SFLOW_HSFLOWD_FAILURE",
+                  EV_KV("operation", "%s", "restart"),
+                  EV_KV("error", "%s", strerror(errno)));
         return;
     }
 }
