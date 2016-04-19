@@ -15,6 +15,8 @@
 		- [ofproto simulation provider plugin](#ofproto-simulation-provider-plugin)
 		- [ofproto simulation provider data structure](#ofproto-simulation-provider-data-structure)
 		- [ofproto simulation provider key class functions](#ofproto-simulation-provider-key-class-functions)
+- [Design](#design)
+    - [sFlow](#sFlow)
 - [References](#references)
 
 ## Description
@@ -183,9 +185,43 @@ The `ofproto` class functions are loaded dynamically via a plugin. It allows fle
 * `set_vlan`             - Enable/disable a VLAN after a VLAN change. Scan all ports in the bridge; Reconfigure if needed.
 * `get_datapath_version` - Get datapath version.
 
+## Design
+
+### sFlow
+sFlow protocol samples ingress and egress packets from L2 and L3 interfaces and
+sends these samples as sFlow UDP datagrams to an external collector. sFlow also
+periodically sends interface statistics to the collector.
+
+The container plugin supports sFlow on L2 interfaces by programming the "ASIC"
+OVS.
+    -   sFlow configuration from OpenSwitch database is converted to the sFlow
+        configuration in the "ASIC" OVS database. This configuration is then
+        applied to all the OVS bridges which in-turn applies it on all the
+        interfaces (L2) under each bridge.
+    -   "ASIC" OVS would then start sampling packets on all L2 interfaces. It
+        would also periodically poll the L2 interface statistics and send the
+        sampled packets and the counter statistics to the configured collector.
+
+The container plugin supports sFlow on L3 interfaces by programming `Host sFlow
+agent`(hsflowd):
+    -   sFlow configuration from OpenSwitch database is converted to
+        configuration in hsflowd.conf file.
+    -   iptables NFLOG rules are then inserted into the INPUT, OUTPUT and
+        FORWARD chains which allows sFlow sampling for both ingress and egress
+        traffic.
+    -   hsflowd daemon is then restarted so it reads the sFlow configuration in
+        hsflowd.conf and starts sampling on all the Linux interfaces (L3).
+    -   hsflowd also periodically sends Linux interface statistics to the
+        configured collector.
+
+The container plugin also reads iptables counters which are the number of
+samples sent to the collector. These statistics are published to the database
+as part of the generic stats collection infrastructure.
+
 ## References
 -------------
 * [OpenSwitch](http://www.openswitch.net/)
 * [Open vSwitch](http://www.openvswitch.org/)
 * [Docker](http://www.docker.com/)
 * [Mininet](http://www.mininet.org/)
+* [Host sFlow](http://www.sflow.net/)
