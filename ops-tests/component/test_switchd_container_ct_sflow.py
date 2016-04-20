@@ -82,7 +82,7 @@ def test_container_ct_sflow(topology, step):
     expected_cfg['agent'] = agent_interface
 
     step("### Verifying sFlow configuration in Sim OVS ###")
-    # Wait until sFlow row is created in sim ovsdb
+    # Wait until sFlow row is created in SIM ovsdb
     uuid_found = False
     while not uuid_found:
         uuid_sflow = ops1("/opt/openvswitch/bin/ovs-vsctl get bridge "
