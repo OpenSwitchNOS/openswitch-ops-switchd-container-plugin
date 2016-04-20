@@ -172,6 +172,7 @@ struct sim_sflow_cfg {
     char *agent_device;        /* Agent Interface (IP address that is used
                                   in sFlow datagram) */
     bool set;
+    bool disabled;             /* sFlow is disabled */
 };
 
 struct sim_provider_node {
@@ -261,4 +262,7 @@ static int mirror_scan(struct mbridge *);
 static void mirror_destroy(struct mbridge *mbridge, void *aux);
 
 extern const struct ofproto_class ofproto_sim_provider_class;
+
+int register_qos_extension(void);
+
 #endif /* ofproto/ofproto-sim-provider.h */

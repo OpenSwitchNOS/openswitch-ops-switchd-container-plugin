@@ -24,6 +24,8 @@
 #include "config.h"
 #include "ofproto/ofproto-provider.h"
 #include "ofproto/bond.h"
+#include "plugin-extensions.h"
+#include "qos-asic-provider.h"
 #include "ofproto/tunnel.h"
 #include "bundle.h"
 #include "coverage.h"
@@ -36,10 +38,14 @@
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
+#include "eventlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
 #define MIRROR_OUTPUT_PORT_CMD_MIN_LEN 56
+
+static struct plugin_extension_interface qos_extension;
+
 
 /* This struct needs to move to ofproto.h after Dill */
 struct ofproto_mirror_bundle {
@@ -1727,6 +1733,8 @@ sflow_iptable_del_all(void)
     /* delete all sflow related iptable rules in the system */
     if ((system("iptables -S | sed \"/SFLOW/s/-A/iptables -D/e\"")) != 0) {
         VLOG_ERR("Failed to delete all iptable rules, rc=%s", strerror(errno));
+        log_event("SFLOW_IPTABLES_DEL_ALL_FAILURE",
+                  EV_KV("error", "%s", strerror(errno)));
     }
 }
 
@@ -1737,6 +1745,11 @@ sflow_disable(struct sim_provider_node *ofproto,
     int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
 
+    if (sim_cfg->disabled) {
+        VLOG_DBG("sFlow is already disabled");
+        return;
+    }
+
     sflow_cfg_clear(sim_cfg);
 
     if (ofproto->vrf) {
@@ -1744,6 +1757,9 @@ sflow_disable(struct sim_provider_node *ofproto,
         /* stop host sflow agent */
         if ((system("systemctl stop host-sflow")) != 0) {
             VLOG_ERR("Failed to stop host sflow agent, rc=%s", strerror(errno));
+            log_event("SFLOW_HSFLOWD_FAILURE",
+                      EV_KV("operation", "%s", "stop"),
+                      EV_KV("error", "%s", strerror(errno)));
         }
     } else {
         /* remove the sflow config from bridge */
@@ -1756,9 +1772,13 @@ sflow_disable(struct sim_provider_node *ofproto,
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to remove sflow config from bridge %s. cmd='%s', rc=%s",
                       ofproto->up.name, cmd_str, strerror(errno));
+            log_event("SFLOW_SIM_CFG_FAILURE",
+                      EV_KV("operation", "%s", "remove"),
+                      EV_KV("bridge", "%s", ofproto->up.name),
+                      EV_KV("error", "%s", strerror(errno)));
         }
     }
-
+    sim_cfg->disabled = true;
 }
 
 static bool
@@ -1815,6 +1835,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "INPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1824,6 +1849,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "OUTPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1833,6 +1863,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1842,6 +1877,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     return 0;
@@ -1858,6 +1898,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "INPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1867,6 +1912,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "OUTPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1876,6 +1926,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1885,6 +1940,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     return 0;
@@ -2009,6 +2069,10 @@ sflow_ovs_configure(struct sim_provider_node *ofproto,
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to set sflow on bridge '%s'. cmd='%s', rc=%s",
                  ofproto->up.name, cmd_str, strerror(errno));
+        log_event("SFLOW_SIM_CFG_FAILURE",
+                  EV_KV("operation", "%s", "set"),
+                  EV_KV("bridge", "%s", ofproto->up.name),
+                  EV_KV("error", "%s", strerror(errno)));
     }
 }
 
@@ -2026,6 +2090,10 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     if (!fp) {
         VLOG_ERR("Failed to open host sflow cfg file '%s'. rc='%s'",
                  HOSTSFLOW_CFG_FILENAME, strerror(errno));
+        log_event("SFLOW_HSFLOWD_CFG_FILE_FAILURE",
+                  EV_KV("operation", "%s", "open"),
+                  EV_KV("file", "%s", HOSTSFLOW_CFG_FILENAME),
+                  EV_KV("error", "%s", strerror(errno)));
         return;
     }
     /* write to the config file */
@@ -2067,12 +2135,19 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     if ((fprintf(fp, "%s", cmd_str)) < 0) {
         VLOG_ERR("Failed to write to host sflow cfg file '%s'. rc='%s'",
                  HOSTSFLOW_CFG_FILENAME, strerror(errno));
+        log_event("SFLOW_HSFLOWD_CFG_FILE_FAILURE",
+                  EV_KV("operation", "%s", "write"),
+                  EV_KV("file", "%s", HOSTSFLOW_CFG_FILENAME),
+                  EV_KV("error", "%s", strerror(errno)));
     }
     fclose(fp);
 
     /* restart host sflow agent */
     if ((system("systemctl restart host-sflow")) != 0) {
         VLOG_ERR("Failed to restart host sflow agent, rc=%s", strerror(errno));
+        log_event("SFLOW_HSFLOWD_FAILURE",
+                  EV_KV("operation", "%s", "restart"),
+                  EV_KV("error", "%s", strerror(errno)));
         return;
     }
 }
@@ -2124,6 +2199,7 @@ set_sflow(struct ofproto *ofproto_,
 
     sflow_cfg_clear(sim_cfg);
     sflow_cfg_set((struct ofproto_sflow_options *)ofproto_cfg, sim_cfg);
+    sim_cfg->disabled = false;
 
     if (ofproto->vrf) { /* for L3 interfaces, use host sflow agent */
         sflow_iptable_del_all();
@@ -2135,6 +2211,109 @@ set_sflow(struct ofproto *ofproto_,
 
     }
     return 0;
+}
+
+/* QOS. */
+int
+set_port_qos_cfg(struct ofproto *ofproto_,
+                 void *aux,  // struct port *port
+                 const struct  qos_port_settings *cfg) {
+    const struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+
+    struct ofbundle *bundle = bundle_lookup(ofproto, aux);
+    if (bundle)
+    {
+        VLOG_DBG("%s: port %s, settings->qos_trust %d, cfg@ %p",
+                 __FUNCTION__, bundle->name, cfg->qos_trust, cfg->other_config);
+    }
+    else
+    {
+        VLOG_DBG("%s: NO BUNDLE aux@%p, settings->qos_trust %d, cfg@ %p",
+                 __FUNCTION__, aux, cfg->qos_trust, cfg->other_config);
+    }
+
+    return 0;
+}
+
+int
+set_cos_map(struct ofproto *ofproto,
+            void *aux,
+            const struct cos_map_settings *settings) {
+    int   index;
+    struct cos_map_entry *entry;
+
+    for (index = 0; index < settings->n_entries; index++) {
+        entry = &settings->entries[index];
+        VLOG_DBG("%s: ofproto@ %p index=%d color=%d cp=%d lp=%d",
+                 __FUNCTION__, ofproto, index,
+                 entry->color, entry->codepoint, entry->local_priority);
+    }
+
+    return 0;
+}
+
+int
+set_dscp_map(struct ofproto *ofproto,
+             void *aux,
+             const struct dscp_map_settings *settings) {
+    int   index;
+    struct dscp_map_entry *entry;
+
+    for (index = 0; index < settings->n_entries; index++) {
+        entry = &settings->entries[index];
+        VLOG_DBG("%s: ofproto@ %p index=%d color=%d cp=%d lp=%d cos=%d",
+                 __FUNCTION__, ofproto, index,
+                 entry->color, entry->codepoint, entry->local_priority, entry->cos);
+    }
+
+    return 0;
+}
+
+int
+apply_qos_profile(struct ofproto *ofproto,
+                  void *aux,
+                  const struct schedule_profile_settings *s_settings,
+                  const struct queue_profile_settings *q_settings) {
+    int index;
+    struct queue_profile_entry *qp_entry;
+    struct schedule_profile_entry *sp_entry;
+
+    VLOG_DBG("%s ofproto@ %p aux=%p q_settings=%p s_settings=%p", __FUNCTION__,
+             aux, ofproto, s_settings, q_settings);
+
+    for (index = 0; index < q_settings->n_entries; index++) {
+        qp_entry = q_settings->entries[index];
+        VLOG_DBG("... %d q=%d #lp=%d", index,
+                 qp_entry->queue, qp_entry->n_local_priorities);
+    }
+
+    for (index = 0; index < s_settings->n_entries; index++) {
+        sp_entry = s_settings->entries[index];
+        VLOG_DBG("... %d q=%d alg=%d wt=%d", index,
+                 sp_entry->queue, sp_entry->algorithm, sp_entry->weight);
+    }
+
+    return 0;
+}
+
+static struct qos_asic_plugin_interface qos_asic_plugin = {
+    set_port_qos_cfg,
+    set_cos_map,
+    set_dscp_map,
+    apply_qos_profile
+};
+
+static struct plugin_extension_interface qos_extension = {
+    QOS_ASIC_PLUGIN_INTERFACE_NAME,
+    QOS_ASIC_PLUGIN_INTERFACE_MAJOR,
+    QOS_ASIC_PLUGIN_INTERFACE_MINOR,
+    (void *)&qos_asic_plugin
+};
+
+int
+register_qos_extension(void)
+{
+    return(register_plugin_extension(&qos_extension));
 }
 
 #if 0
