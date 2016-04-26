@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2015 Hewlett Packard Enterprise Development LP
+ *  (c) Copyright 2015-2016 Hewlett Packard Enterprise Development LP
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may
  *  not use this file except in compliance with the License. You may obtain
@@ -20,6 +20,8 @@
 #include "ofproto/ofproto-provider.h"
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
+#include "eventlog.h"
+#include "sim-copp-plugin.h"
 #include "ops-classifier-sim.h"
 
 #define init libovs_sim_plugin_LTX_init
@@ -34,7 +36,15 @@ VLOG_DEFINE_THIS_MODULE(sim_plugin);
 void
 init(void)
 {
+    int retval;
     char cmd_str[MAX_CMD_LEN];
+
+    /* Event log initialization for sFlow */
+    retval = event_log_init("SFLOW");
+    if(retval < 0) {
+        VLOG_ERR("Event log initialization failed for SFLOW");
+    }
+
     memset(cmd_str, 0, sizeof(cmd_str));
     /* Cleaning up the Internal "ASIC" OVS everytime ops-switchd daemon is
     * started or restarted or killed to keep the "ASIC" OVS database in sync
@@ -68,6 +78,9 @@ init(void)
     if (system("systemctl start openvswitch-sim") != 0) {
         VLOG_ERR("Failed to start Internal 'ASIC' OVS openvswitch.service");
     }
+
+    register_qos_extension();
+    sim_copp_init();
 
     /* Register ASIC plugins */
     register_asic_plugins();

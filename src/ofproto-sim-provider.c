@@ -19,10 +19,13 @@
 #include <errno.h>
 #include <unistd.h>
 #include <net/if.h>
+#include <string.h>
 
 #include "config.h"
 #include "ofproto/ofproto-provider.h"
 #include "ofproto/bond.h"
+#include "plugin-extensions.h"
+#include "qos-asic-provider.h"
 #include "ofproto/tunnel.h"
 #include "bundle.h"
 #include "coverage.h"
@@ -35,9 +38,20 @@
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
+#include "eventlog.h"
 #include "ops-classifier-sim.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
+
+static struct plugin_extension_interface qos_extension;
+
+#define MIRROR_OUTPUT_PORT_CMD_MIN_LEN 56
+
+/* This struct needs to move to ofproto.h after Dill */
+struct ofproto_mirror_bundle {
+    struct ofproto *ofproto;
+    void           *aux;
+};
 
 static struct sim_provider_ofport *
 sim_provider_ofport_cast(const struct ofport *ofport)
@@ -107,6 +121,55 @@ port_open_type(const char *datapath_type OVS_UNUSED, const char *port_type)
     return "system";
 }
 
+struct mbridge *
+mbridge_create(void)
+{
+    struct mbridge *mbridge;
+
+    mbridge = xzalloc(sizeof *mbridge);
+    ovs_refcount_init(&mbridge->ref_cnt);
+
+    hmap_init(&mbridge->mbundles);
+    return mbridge;
+}
+
+void
+mbridge_register_bundle(struct mbridge *mbridge, struct ofbundle *ofbundle)
+{
+    struct mbundle *mbundle;
+
+    mbundle = xzalloc(sizeof *mbundle);
+    mbundle->ofbundle = ofbundle;
+    hmap_insert(&mbridge->mbundles, &mbundle->hmap_node,
+                hash_pointer(ofbundle, 0));
+}
+
+void
+mbridge_unregister_bundle(struct mbridge *mbridge, struct ofbundle *ofbundle)
+{
+    struct mbundle *mbundle = mbundle_lookup(mbridge, ofbundle);
+    size_t i;
+
+    if (!mbundle) {
+        return;
+    }
+
+    for (i = 0; i < MAX_MIRRORS; i++) {
+        struct mirror *m = mbridge->mirrors[i];
+        if (m) {
+            if (m->out == mbundle) {
+                mirror_destroy(mbridge, m->aux);
+            } else if (hmapx_find_and_delete(&m->srcs, mbundle)
+                       || hmapx_find_and_delete(&m->dsts, mbundle)) {
+                mbridge->need_revalidate = true;
+            }
+        }
+    }
+
+    hmap_remove(&mbridge->mbundles, &mbundle->hmap_node);
+    free(mbundle);
+}
+
 /* Basic life-cycle. */
 
 static struct ofproto *
@@ -174,6 +237,7 @@ construct(struct ofproto *ofproto_)
     ofproto->dump_seq = 0;
     hmap_init(&ofproto->bundles);
     ofproto->ms = NULL;
+    ofproto->mbridge = mbridge_create();
     ofproto->has_bonded_bundles = false;
     ofproto->lacp_enabled = false;
     ofproto_tunnel_init();
@@ -227,6 +291,10 @@ destruct(struct ofproto *ofproto_ OVS_UNUSED)
 
     ovs_mutex_destroy(&ofproto->stats_mutex);
     ovs_mutex_destroy(&ofproto->vsp_mutex);
+
+    if (ofproto->mbridge) {
+        free(ofproto->mbridge);
+    }
 
     return;
 }
@@ -381,6 +449,10 @@ bundle_del_port(struct sim_provider_ofport *port)
         enable_port_in_iptables(netdev_get_name(port->up.netdev));
         port->iptable_rules_added = false;
     }
+
+    if (bundle->ofproto->vrf) {
+        netdev_sim_l3stats_xtables_rules_delete(port->up.netdev);
+    }
 }
 
 static bool
@@ -392,7 +464,6 @@ bundle_add_port(struct ofbundle *bundle, ofp_port_t ofp_port)
     if (!port) {
         return false;
     }
-
     if (port->bundle != bundle) {
         if (port->bundle) {
             bundle_remove(&port->up);
@@ -400,6 +471,10 @@ bundle_add_port(struct ofbundle *bundle, ofp_port_t ofp_port)
 
         port->bundle = bundle;
         list_push_back(&bundle->ports, &port->bundle_node);
+        if(bundle->ofproto->vrf) {
+            netdev_sim_l3stats_xtables_rules_create(port->up.netdev);
+        }
+
     }
 
     return true;
@@ -476,6 +551,7 @@ bundle_destroy(struct ofbundle *bundle)
     }
 
     ofproto = bundle->ofproto;
+    mbridge_unregister_bundle(ofproto->mbridge, bundle);
 
     if (bundle->is_added_to_sim_ovs == true) {
         snprintf(cmd_str, MAX_CMD_LEN, "%s del-port %s", OVS_VSCTL,
@@ -687,6 +763,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         bundle->is_vlan_routing_enabled = false;
         bundle->is_bridge_bundle = false;
         bundle->is_sflow_enabled = true;
+        mbridge_register_bundle(ofproto->mbridge, bundle);
     }
 
     if (!bundle->name || strcmp(s->name, bundle->name)) {
@@ -913,8 +990,401 @@ set_vlan(struct ofproto *ofproto_, int vid, bool add)
 
 /* Mirrors. */
 static int
-mirror_get_stats__(struct ofproto *ofproto OVS_UNUSED, void *aux OVS_UNUSED,
-                   uint64_t * packets OVS_UNUSED, uint64_t * bytes OVS_UNUSED)
+mirror_set(struct ofproto *ofproto_, void *aux,
+                      const struct ofproto_mirror_settings *s)
+{
+    struct mbundle *mbundle, *out;
+    struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+    char cmd_str[MAX_CMD_LEN];
+    int i = 0, n = 0, retval = 0;
+    struct mirror *mirror;
+    mirror_mask_t mirror_bit;
+    struct mbridge *mbridge;
+    struct ofproto_mirror_bundle *srcs, *dsts;
+    struct ofproto_mirror_bundle *outmb;
+    struct ofbundle **bndlSrcs = NULL, **bndlDsts = NULL;
+    struct hmapx srcs_map; /* Contains "struct ofbundle *"s. */
+    struct hmapx dsts_map; /* Contains "struct ofbundle *"s. */
+    struct ofbundle *out_bundle;
+    bool mirrorModify = false;
+
+    VLOG_DBG("%s:Entry()", __FUNCTION__);
+
+    hmapx_init(&srcs_map);
+    hmapx_init(&dsts_map);
+
+    mbridge = ofproto->mbridge;
+    mirror = mirror_lookup(mbridge, aux);
+
+    if (NULL != s) {
+        /*This is a mirror create/modify. Save a copy of the mirror config in mbridge */
+        if (!mirror) {
+            int idx;
+
+            VLOG_DBG("%s:Existing mirror not found", __FUNCTION__);
+
+            idx = mirror_scan(mbridge);
+            if (idx < 0) {
+                VLOG_ERR(
+                        "maximum of %d port mirrors reached, cannot create %s",
+                        MAX_MIRRORS, s->name);
+                return EFBIG;
+            }
+
+            VLOG_DBG("%s:Allocating new mirror", __FUNCTION__);
+            mirror = mbridge->mirrors[idx] = xzalloc(sizeof *mirror);
+            mirror->mbridge = mbridge;
+            mirror->idx = idx;
+            mirror->aux = aux;
+            mirror->out_vlan = -1;
+            mirror->name = xzalloc(MAX_MIRROR_NAME_LEN);
+            strncpy(mirror->name, s->name, MAX_MIRROR_NAME_LEN);
+            mirror->name[MAX_MIRROR_NAME_LEN] = '\0';
+        } else {
+            VLOG_DBG("%s:Modifying existing mirror", __FUNCTION__);
+            mirrorModify = true;
+        }
+
+        srcs = (struct ofproto_mirror_bundle *)(s->srcs);
+        dsts = (struct ofproto_mirror_bundle *)(s->dsts);
+
+        if (s->out_bundle) {
+            outmb = (struct ofproto_mirror_bundle *)(s->out_bundle);
+            if (ofproto_ != outmb->ofproto) {
+                mirror_destroy(mbridge, mirror->aux);
+                VLOG_ERR(
+                        "cannot create mirror %s, container doesn't support use of ports spanning multiple bridges.",
+                        s->name);
+                return EINVAL;
+            }
+            out_bundle = bundle_lookup(sim_provider_node_cast(outmb->ofproto), outmb->aux);
+            /* Get the new configuration. */
+            if (out_bundle) {
+                VLOG_DBG("%s:Mirror output %s", __FUNCTION__,
+                        out_bundle->name);
+                out = mbundle_lookup(mbridge, out_bundle);
+                if (!out) {
+                    mirror_destroy(mbridge, mirror->aux);
+                    return EINVAL;
+                }
+            } else {
+                out = NULL;
+            }
+        } else {
+            out = NULL;
+        }
+
+        if (s->n_srcs > 0) {
+            bndlSrcs = xmalloc(s->n_srcs * sizeof *bndlSrcs);
+            for (i = 0; i < s->n_srcs; i++) {
+                if (ofproto_ != srcs[i].ofproto)
+                {
+                    free(bndlSrcs);
+                    mirror_destroy(mbridge, mirror->aux);
+                    VLOG_ERR(
+                    "cannot create mirror %s, container doesn't support use of ports spanning multiple bridges.",
+                    s->name);
+                    return EINVAL;
+                }
+                bndlSrcs[i] = bundle_lookup(sim_provider_node_cast(srcs[i].ofproto), srcs[i].aux);
+            }
+            mbundle_lookup_multiple(mbridge, bndlSrcs, s->n_srcs, &srcs_map);
+        }
+        if (s->n_dsts > 0) {
+            bndlDsts = xmalloc(s->n_dsts * sizeof *bndlDsts);
+            for (i = 0; i < s->n_dsts; i++) {
+                if (ofproto_ != dsts[i].ofproto)
+                {
+                    if (bndlSrcs) {
+                        free(bndlSrcs);
+                    }
+                    free(bndlDsts);
+                    mirror_destroy(mbridge, mirror->aux);
+                    VLOG_ERR(
+                    "cannot create mirror %s, container doesn't support use of ports spanning multiple bridges.",
+                    s->name);
+                    return EINVAL;
+                }
+                bndlDsts[i] = bundle_lookup(sim_provider_node_cast(dsts[i].ofproto), dsts[i].aux);
+            }
+            mbundle_lookup_multiple(mbridge, bndlDsts, s->n_dsts, &dsts_map);
+        }
+
+        if (hmapx_equals(&srcs_map, &mirror->srcs)
+                && hmapx_equals(&dsts_map, &mirror->dsts)
+                && vlan_bitmap_equal(mirror->vlans, s->src_vlans)
+                && mirror->out == out && mirror->out_vlan == s->out_vlan) {
+            /* If the configuration has not changed, do nothing. */
+            hmapx_destroy(&srcs_map);
+            hmapx_destroy(&dsts_map);
+            if (bndlSrcs) {
+                free(bndlSrcs);
+            }
+            if (bndlDsts) {
+                free(bndlDsts);
+            }
+            VLOG_INFO(
+            "Mirror %s unchanged.", s->name);
+            return 0;
+        }
+
+        hmapx_swap(&srcs_map, &mirror->srcs);
+        hmapx_destroy(&srcs_map);
+
+        hmapx_swap(&dsts_map, &mirror->dsts);
+        hmapx_destroy(&dsts_map);
+
+        free(mirror->vlans);
+        mirror->vlans = vlan_bitmap_clone(s->src_vlans);
+
+        mirror->out = out;
+        mirror->out_vlan = s->out_vlan;
+
+        mbridge->has_mirrors = true;
+
+        /* TODO: vLANs aren't supported yet */
+
+        /************************************************************/
+        /* delete the mirror in openvswitch before creating new one */
+        /************************************************************/
+        if (mirrorModify == true) {
+            n = snprintf(cmd_str, MAX_CMD_LEN,
+                         "%s -- --id=@m get mirror %s -- remove bridge bridge_normal mirrors @m",
+                         OVS_VSCTL, mirror->name);
+
+            VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+
+            if (system(cmd_str) != 0) {
+                VLOG_ERR("Failed to delete mirror %s for modify: %s", mirror->name,
+                        strerror(errno));
+                retval = errno;
+            }
+        }
+        /************************************************************/
+        /* Build the command to construct the mirror in openvswitch */
+        /************************************************************/
+        n = snprintf(cmd_str, MAX_CMD_LEN,
+                     "%s -- --id=@m create mirror name=%s -- add bridge bridge_normal mirrors @m",
+                     OVS_VSCTL, s->name);
+
+        /***********************************/
+        /* Add the ingress ports           */
+        if (s->n_srcs > 0) {
+            for (i = 0; i < s->n_srcs; i++) {
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    " -- --id=@srx%s get port %s", bndlSrcs[i]->name,
+                    bndlSrcs[i]->name);
+            }
+
+            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                " -- set mirror %s select-src-port=", s->name);
+
+            for (i = 0; i < s->n_srcs; i++) {
+                if (i > 0 && (MAX_CMD_LEN - n > 0)) {
+                    /* Add the comma required to list multiple ports */
+                    cmd_str[n] = ',';
+                    n++;
+                }
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    "@srx%s", bndlSrcs[i]->name);
+            }
+        }
+        /***********************************/
+        /* Add the egress ports            */
+        if (s->n_dsts > 0) {
+            for (i = 0; i < s->n_dsts; i++) {
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    " -- --id=@stx%s get port %s", bndlDsts[i]->name,
+                    bndlDsts[i]->name);
+            }
+
+            n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                " -- set mirror %s select-dst-port=", s->name);
+
+            for (i = 0; i < s->n_dsts; i++) {
+                if (i > 0 && (MAX_CMD_LEN - n > 0)) {
+                    /* Add the comma required to list multiple ports */
+                    cmd_str[n] = ',';
+                    n++;
+                }
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                    "@stx%s", bndlDsts[i]->name);
+            }
+        }
+        /* Check if the buffer has enough space for the remaining command
+         * buffer to be added */
+        if ((MAX_CMD_LEN - n)
+                < (MIRROR_OUTPUT_PORT_CMD_MIN_LEN + strlen(out_bundle->name)
+                        + strlen(s->name))) {
+            VLOG_ERR(
+                    "Failed to create mirror '%s'. Command length would exceed buffer size %d",
+                    s->name, MAX_CMD_LEN);
+            mirror_destroy(mbridge, mirror->aux);
+
+            retval = EMSGSIZE;
+        } else {
+            /***********************************/
+            /* Set the output port             */
+            if (out_bundle) {
+                /* strings in here are 55 chars without the variable parameters
+                 * This is captured in MIRROR_OUTPUT_PORT_CMD_MIN_LEN which accounts for
+                 * this size NULL.
+                 * If you update the command strings below, update the size of
+                 * MIROR_OUTPUT_PORT_CMD_MIN_LEN
+                 */
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                " -- --id=@out get port %s", out_bundle->name);
+                n += snprintf(&cmd_str[n], MAX_CMD_LEN - n,
+                " -- set mirror %s output-port=@out ", s->name);
+            }
+
+            VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+
+            if (system(cmd_str) != 0) {
+                VLOG_ERR("Failed to create mirror %s. %s", s->name,
+                strerror(errno));
+                mirror_destroy(mbridge, mirror->aux);
+                retval = errno;
+            }
+            else {
+                /* regardless of what errors we had before, if the create succeeds we'll go with it */
+                retval = 0;
+            }
+        }
+
+    } else {
+        /* This is a mirror delete */
+
+        if (mirror == NULL) {
+            VLOG_ERR("No mirror to delete");
+            return 0;
+        }
+        /************************************************************/
+        /* Build the command to delete the mirror in openvswitch */
+        /************************************************************/
+        n = snprintf(cmd_str, MAX_CMD_LEN,
+                     "%s -- --id=@m get mirror %s -- remove bridge bridge_normal mirrors @m",
+                     OVS_VSCTL, mirror->name);
+
+        VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+
+        if (system(cmd_str) != 0) {
+            VLOG_ERR("Failed to delete mirror %s. %s", mirror->name,
+                    strerror(errno));
+            retval = errno;
+        }
+
+        /* Now we can delete our copy of the mirror config */
+        mirror_destroy(mbridge, aux);
+    }
+
+    /* Clean up from create/modify */
+    if (bndlSrcs) {
+        free(bndlSrcs);
+    }
+    if (bndlDsts) {
+        free(bndlDsts);
+    }
+
+    return retval;
+}
+
+static struct mirror *
+mirror_lookup(struct mbridge *mbridge, void *aux)
+{
+    int i;
+
+    for (i = 0; i < MAX_MIRRORS; i++) {
+        struct mirror *mirror = mbridge->mirrors[i];
+        if (mirror && mirror->aux == aux) {
+            return mirror;
+        }
+    }
+
+    return NULL;
+}
+
+static struct mbundle *
+mbundle_lookup(const struct mbridge *mbridge, struct ofbundle *ofbundle)
+{
+    struct mbundle *mbundle;
+
+    HMAP_FOR_EACH_IN_BUCKET (mbundle, hmap_node, hash_pointer(ofbundle, 0),
+                             &mbridge->mbundles) {
+        if (mbundle->ofbundle == ofbundle) {
+            return mbundle;
+        }
+    }
+    return NULL;
+}
+
+
+void
+mirror_destroy(struct mbridge *mbridge, void *aux)
+{
+    struct mirror *mirror = mirror_lookup(mbridge, aux);
+    mirror_mask_t mirror_bit;
+    struct mbundle *mbundle;
+    int i;
+
+    if (!mirror) {
+        VLOG_DBG("%s:Existing mirror not found, nothing to delete", __FUNCTION__);
+        return;
+    }
+
+    VLOG_DBG("%s:Deleting mirror %s", __FUNCTION__, mirror->name);
+    i = mirror->idx;
+
+    hmapx_destroy(&mirror->srcs);
+    hmapx_destroy(&mirror->dsts);
+
+    free(mirror->name);
+    free(mirror->vlans);
+    free(mirror);
+
+    mbridge->mirrors[i] = NULL;
+
+    mbridge->has_mirrors = false;
+    for (i = 0; i < MAX_MIRRORS; i++) {
+        if (mbridge->mirrors[i]) {
+            mbridge->has_mirrors = true;
+            break;
+        }
+    }
+}
+
+static int
+mirror_scan(struct mbridge *mbridge)
+{
+    int idx;
+
+    for (idx = 0; idx < MAX_MIRRORS; idx++) {
+        if (!mbridge->mirrors[idx]) {
+            return idx;
+        }
+    }
+    return -1;
+}
+
+static void
+mbundle_lookup_multiple(const struct mbridge *mbridge,
+                        struct ofbundle **ofbundles, size_t n_ofbundles,
+                        struct hmapx *mbundles)
+{
+    size_t i;
+
+    hmapx_init(mbundles);
+    for (i = 0; i < n_ofbundles; i++) {
+        struct mbundle *mbundle = mbundle_lookup(mbridge, ofbundles[i]);
+        if (mbundle) {
+            hmapx_add(mbundles, mbundle);
+        }
+    }
+}
+
+static int
+mirror_get_stats__(struct ofproto *ofproto, void *aux,
+                   uint64_t * packets, uint64_t * bytes)
 {
     return 0;
 }
@@ -1269,6 +1739,8 @@ sflow_iptable_del_all(void)
     /* delete all sflow related iptable rules in the system */
     if ((system("iptables -S | sed \"/SFLOW/s/-A/iptables -D/e\"")) != 0) {
         VLOG_ERR("Failed to delete all iptable rules, rc=%s", strerror(errno));
+        log_event("SFLOW_IPTABLES_DEL_ALL_FAILURE",
+                  EV_KV("error", "%s", strerror(errno)));
     }
 }
 
@@ -1279,6 +1751,11 @@ sflow_disable(struct sim_provider_node *ofproto,
     int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
 
+    if (sim_cfg->disabled) {
+        VLOG_DBG("sFlow is already disabled");
+        return;
+    }
+
     sflow_cfg_clear(sim_cfg);
 
     if (ofproto->vrf) {
@@ -1286,6 +1763,9 @@ sflow_disable(struct sim_provider_node *ofproto,
         /* stop host sflow agent */
         if ((system("systemctl stop host-sflow")) != 0) {
             VLOG_ERR("Failed to stop host sflow agent, rc=%s", strerror(errno));
+            log_event("SFLOW_HSFLOWD_FAILURE",
+                      EV_KV("operation", "%s", "stop"),
+                      EV_KV("error", "%s", strerror(errno)));
         }
     } else {
         /* remove the sflow config from bridge */
@@ -1298,9 +1778,13 @@ sflow_disable(struct sim_provider_node *ofproto,
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to remove sflow config from bridge %s. cmd='%s', rc=%s",
                       ofproto->up.name, cmd_str, strerror(errno));
+            log_event("SFLOW_SIM_CFG_FAILURE",
+                      EV_KV("operation", "%s", "remove"),
+                      EV_KV("bridge", "%s", ofproto->up.name),
+                      EV_KV("error", "%s", strerror(errno)));
         }
     }
-
+    sim_cfg->disabled = true;
 }
 
 static bool
@@ -1357,6 +1841,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "INPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1366,6 +1855,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "OUTPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1375,6 +1869,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1384,6 +1883,11 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "add"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     return 0;
@@ -1400,6 +1904,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "INPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1409,6 +1918,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "OUTPUT"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1418,6 +1932,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     cmd_len = 0;
@@ -1427,6 +1946,11 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
+        log_event("SFLOW_IPTABLES_FAILURE",
+                  EV_KV("operation", "%s", "delete"),
+                  EV_KV("chain", "%s", "FORWARD"),
+                  EV_KV("port", "%s", port),
+                  EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
     return 0;
@@ -1551,6 +2075,10 @@ sflow_ovs_configure(struct sim_provider_node *ofproto,
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to set sflow on bridge '%s'. cmd='%s', rc=%s",
                  ofproto->up.name, cmd_str, strerror(errno));
+        log_event("SFLOW_SIM_CFG_FAILURE",
+                  EV_KV("operation", "%s", "set"),
+                  EV_KV("bridge", "%s", ofproto->up.name),
+                  EV_KV("error", "%s", strerror(errno)));
     }
 }
 
@@ -1568,6 +2096,10 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     if (!fp) {
         VLOG_ERR("Failed to open host sflow cfg file '%s'. rc='%s'",
                  HOSTSFLOW_CFG_FILENAME, strerror(errno));
+        log_event("SFLOW_HSFLOWD_CFG_FILE_FAILURE",
+                  EV_KV("operation", "%s", "open"),
+                  EV_KV("file", "%s", HOSTSFLOW_CFG_FILENAME),
+                  EV_KV("error", "%s", strerror(errno)));
         return;
     }
     /* write to the config file */
@@ -1609,12 +2141,19 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
     if ((fprintf(fp, "%s", cmd_str)) < 0) {
         VLOG_ERR("Failed to write to host sflow cfg file '%s'. rc='%s'",
                  HOSTSFLOW_CFG_FILENAME, strerror(errno));
+        log_event("SFLOW_HSFLOWD_CFG_FILE_FAILURE",
+                  EV_KV("operation", "%s", "write"),
+                  EV_KV("file", "%s", HOSTSFLOW_CFG_FILENAME),
+                  EV_KV("error", "%s", strerror(errno)));
     }
     fclose(fp);
 
     /* restart host sflow agent */
     if ((system("systemctl restart host-sflow")) != 0) {
         VLOG_ERR("Failed to restart host sflow agent, rc=%s", strerror(errno));
+        log_event("SFLOW_HSFLOWD_FAILURE",
+                  EV_KV("operation", "%s", "restart"),
+                  EV_KV("error", "%s", strerror(errno)));
         return;
     }
 }
@@ -1666,6 +2205,7 @@ set_sflow(struct ofproto *ofproto_,
 
     sflow_cfg_clear(sim_cfg);
     sflow_cfg_set((struct ofproto_sflow_options *)ofproto_cfg, sim_cfg);
+    sim_cfg->disabled = false;
 
     if (ofproto->vrf) { /* for L3 interfaces, use host sflow agent */
         sflow_iptable_del_all();
@@ -1677,6 +2217,109 @@ set_sflow(struct ofproto *ofproto_,
 
     }
     return 0;
+}
+
+/* QOS. */
+int
+set_port_qos_cfg(struct ofproto *ofproto_,
+                 void *aux,  // struct port *port
+                 const struct  qos_port_settings *cfg) {
+    const struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+
+    struct ofbundle *bundle = bundle_lookup(ofproto, aux);
+    if (bundle)
+    {
+        VLOG_DBG("%s: port %s, settings->qos_trust %d, cfg@ %p",
+                 __FUNCTION__, bundle->name, cfg->qos_trust, cfg->other_config);
+    }
+    else
+    {
+        VLOG_DBG("%s: NO BUNDLE aux@%p, settings->qos_trust %d, cfg@ %p",
+                 __FUNCTION__, aux, cfg->qos_trust, cfg->other_config);
+    }
+
+    return 0;
+}
+
+int
+set_cos_map(struct ofproto *ofproto,
+            void *aux,
+            const struct cos_map_settings *settings) {
+    int   index;
+    struct cos_map_entry *entry;
+
+    for (index = 0; index < settings->n_entries; index++) {
+        entry = &settings->entries[index];
+        VLOG_DBG("%s: ofproto@ %p index=%d color=%d cp=%d lp=%d",
+                 __FUNCTION__, ofproto, index,
+                 entry->color, entry->codepoint, entry->local_priority);
+    }
+
+    return 0;
+}
+
+int
+set_dscp_map(struct ofproto *ofproto,
+             void *aux,
+             const struct dscp_map_settings *settings) {
+    int   index;
+    struct dscp_map_entry *entry;
+
+    for (index = 0; index < settings->n_entries; index++) {
+        entry = &settings->entries[index];
+        VLOG_DBG("%s: ofproto@ %p index=%d color=%d cp=%d lp=%d cos=%d",
+                 __FUNCTION__, ofproto, index,
+                 entry->color, entry->codepoint, entry->local_priority, entry->cos);
+    }
+
+    return 0;
+}
+
+int
+apply_qos_profile(struct ofproto *ofproto,
+                  void *aux,
+                  const struct schedule_profile_settings *s_settings,
+                  const struct queue_profile_settings *q_settings) {
+    int index;
+    struct queue_profile_entry *qp_entry;
+    struct schedule_profile_entry *sp_entry;
+
+    VLOG_DBG("%s ofproto@ %p aux=%p q_settings=%p s_settings=%p", __FUNCTION__,
+             aux, ofproto, s_settings, q_settings);
+
+    for (index = 0; index < q_settings->n_entries; index++) {
+        qp_entry = q_settings->entries[index];
+        VLOG_DBG("... %d q=%d #lp=%d", index,
+                 qp_entry->queue, qp_entry->n_local_priorities);
+    }
+
+    for (index = 0; index < s_settings->n_entries; index++) {
+        sp_entry = s_settings->entries[index];
+        VLOG_DBG("... %d q=%d alg=%d wt=%d", index,
+                 sp_entry->queue, sp_entry->algorithm, sp_entry->weight);
+    }
+
+    return 0;
+}
+
+static struct qos_asic_plugin_interface qos_asic_plugin = {
+    set_port_qos_cfg,
+    set_cos_map,
+    set_dscp_map,
+    apply_qos_profile
+};
+
+static struct plugin_extension_interface qos_extension = {
+    QOS_ASIC_PLUGIN_INTERFACE_NAME,
+    QOS_ASIC_PLUGIN_INTERFACE_MAJOR,
+    QOS_ASIC_PLUGIN_INTERFACE_MINOR,
+    (void *)&qos_asic_plugin
+};
+
+int
+register_qos_extension(void)
+{
+    return(register_plugin_extension(&qos_extension));
 }
 
 #if 0
@@ -1779,7 +2422,7 @@ const struct ofproto_class ofproto_sim_provider_class = {
     bundle_remove,
     bundle_get,
     set_vlan,
-    NULL,                       /* may implement mirror_set__ */
+    mirror_set,
     mirror_get_stats__,
     NULL,                       /* may implement set_flood_vlans */
     is_mirror_output_bundle,
