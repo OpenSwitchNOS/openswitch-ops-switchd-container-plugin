@@ -225,3 +225,14 @@ as part of the generic stats collection infrastructure.
 * [Docker](http://www.docker.com/)
 * [Mininet](http://www.mininet.org/)
 * [Host sFlow](http://www.sflow.net/)
+
+## COPP
+Control Plane Policing statistics within the container does not provide
+statistics separated by class types.  All statistics provided by the container
+plugin will be in the UNCLASSIFIED class.  The source for COPP statistics data
+is the file /proc/net/dev.  The only statistics available are Rx Packets, Rx
+Bytes, and Rx Dropped Packets.  Rx Dropped Bytes is unsupported.  The statistics
+values are computed by summing the Rx stats for all of the ports found in
+/dev/proc/net, excluding bridge_normal, ovsnet-dev, and lo.  For hardware
+status, rate and burst values are fixed at 1,000,000,000 and local priority is
+fixed at zero.
