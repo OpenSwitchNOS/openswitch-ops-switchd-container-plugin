@@ -1729,6 +1729,9 @@ sflow_cfg_clear(struct sim_sflow_cfg *sim_cfg)
         if (sim_cfg->agent_device) {
             free(sim_cfg->agent_device);
         }
+        if (sim_cfg->agent_ip) {
+            free(sim_cfg->agent_ip);
+        }
         sim_cfg->set = false;
     }
 }
@@ -1745,11 +1748,32 @@ sflow_iptable_del_all(void)
 }
 
 static void
-sflow_disable(struct sim_provider_node *ofproto,
-              struct sim_sflow_cfg *sim_cfg)
+sflow_ovs_delete(struct sim_provider_node *ofproto)
 {
     int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
+
+    /* remove the sflow config from bridge */
+    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+                        "%s list bridge %s | grep sflow | "
+                        "awk -F ': ' '{print $2}' "
+                        "| xargs %s remove bridge %s sflow",
+                        OVS_VSCTL, ofproto->up.name,
+                        OVS_VSCTL, ofproto->up.name);
+    if (system(cmd_str) != 0) {
+        VLOG_ERR("Failed to remove sflow config from bridge %s. cmd='%s', rc=%s",
+                  ofproto->up.name, cmd_str, strerror(errno));
+        log_event("SFLOW_SIM_CFG_FAILURE",
+                  EV_KV("operation", "%s", "remove"),
+                  EV_KV("bridge", "%s", ofproto->up.name),
+                  EV_KV("error", "%s", strerror(errno)));
+    }
+}
+
+static void
+sflow_disable(struct sim_provider_node *ofproto,
+              struct sim_sflow_cfg *sim_cfg)
+{
 
     if (sim_cfg->disabled) {
         VLOG_DBG("sFlow is already disabled");
@@ -1768,21 +1792,7 @@ sflow_disable(struct sim_provider_node *ofproto,
                       EV_KV("error", "%s", strerror(errno)));
         }
     } else {
-        /* remove the sflow config from bridge */
-        cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
-                            "%s list bridge %s | grep sflow | "
-                            "awk -F ': ' '{print $2}' "
-                            "| xargs %s remove bridge %s sflow",
-                            OVS_VSCTL, ofproto->up.name,
-                            OVS_VSCTL, ofproto->up.name);
-        if (system(cmd_str) != 0) {
-            VLOG_ERR("Failed to remove sflow config from bridge %s. cmd='%s', rc=%s",
-                      ofproto->up.name, cmd_str, strerror(errno));
-            log_event("SFLOW_SIM_CFG_FAILURE",
-                      EV_KV("operation", "%s", "remove"),
-                      EV_KV("bridge", "%s", ofproto->up.name),
-                      EV_KV("error", "%s", strerror(errno)));
-        }
+        sflow_ovs_delete(ofproto);
     }
     sim_cfg->disabled = true;
 }
@@ -1807,7 +1817,8 @@ sflow_cfg_equal(struct ofproto_sflow_options *ofproto_cfg,
             && (ofproto_cfg->header_len == sim_cfg->header_len)
             && (ofproto_cfg->max_datagram == sim_cfg->max_datagram)
             && (string_is_equal(ofproto_cfg->agent_device,
-                                sim_cfg->agent_device)));
+                                sim_cfg->agent_device))
+            && (string_is_equal(ofproto_cfg->agent_ip, sim_cfg->agent_ip)));
 }
 
 static void
@@ -1825,6 +1836,8 @@ sflow_cfg_set(struct ofproto_sflow_options *ofproto_cfg,
     sset_clone(&sim_cfg->targets, &ofproto_cfg->targets);
     sim_cfg->agent_device = ofproto_cfg->agent_device ?
                             strdup(ofproto_cfg->agent_device) : NULL;
+    sim_cfg->agent_ip = ofproto_cfg->agent_ip ?
+                            strdup(ofproto_cfg->agent_ip) : NULL;
 
     sim_cfg->set = true;
 }
@@ -2176,10 +2189,10 @@ set_sflow(struct ofproto *ofproto_,
     }
 
     VLOG_DBG("sflow config : sampling : %d, polling : %d, header : %d, "
-             "agent_dev : %s, num_targets : %d\n",
+             "agent_dev : %s, agent_ip : %s, num_targets : %d\n",
              ofproto_cfg->sampling_rate, ofproto_cfg->polling_interval,
              ofproto_cfg->header_len, ofproto_cfg->agent_device,
-             sset_count(&ofproto_cfg->targets));
+             ofproto_cfg->agent_ip, sset_count(&ofproto_cfg->targets));
     SSET_FOR_EACH(target_name, &ofproto_cfg->targets) {
         VLOG_DBG("target [%d] : [%s]\n", target_count++, target_name);
     }
@@ -2213,8 +2226,8 @@ set_sflow(struct ofproto *ofproto_,
         sflow_iptables_reconfigure(ofproto, sim_cfg);
         sflow_hostsflow_agent_configure((struct ofproto_sflow_options *)ofproto_cfg);
     } else { /* for L2 interfaces, set up sflow on the bridge using ovs-sim */
+        sflow_ovs_delete(ofproto);
         sflow_ovs_configure(ofproto, (struct ofproto_sflow_options *)ofproto_cfg);
-
     }
     return 0;
 }
