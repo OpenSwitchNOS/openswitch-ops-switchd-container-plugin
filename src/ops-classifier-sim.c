@@ -44,6 +44,8 @@
 /** Define logging module */
 VLOG_DEFINE_THIS_MODULE(ops_cls_sim);
 
+#define MAX_ACE_ENTRIES 512  /**< max entries per acl */
+
 /**************************************************************************//**
  * OPS_CLS plugin interface definition. This is the instance containing all
  * implementations of ops_cls plugin on container platform.
@@ -88,6 +90,7 @@ struct port2acl {
      ofp_port_t  port;            /**< Port on which ACL is applied */
      struct ops_cls_interface_info interface_info; /**< Interface information */
      enum ops_cls_direction  direction; /**< Direction in which ACL is applied */
+     struct ops_cls_statistics stats[MAX_ACE_ENTRIES]; /**< stats per ace */
  };
 
 /** Private copy of all ACLs */
@@ -390,6 +393,7 @@ ops_cls_pd_apply(struct ops_cls_list            *list,
     struct port2acl *p2acl;
     struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
     bool port_found = false;
+    int idx = 0;
 
     VLOG_DBG("%s called\n", __func__);
 
@@ -430,6 +434,11 @@ ops_cls_pd_apply(struct ops_cls_list            *list,
            sizeof(struct ops_cls_interface_info));
     p2acl->port = port;
     p2acl->direction = direction;
+    for (idx = 0; idx < MAX_ACE_ENTRIES; idx++) {
+        /* set stats defaults */
+        p2acl->stats[idx].stats_enabled = 1;
+        p2acl->stats[idx].hitcounts = 0;
+    }
     hmap_insert(&all_port_applications, &p2acl->list_node,
                 uuid_hash(&p2acl->list_id));
     return 0;
@@ -556,7 +565,68 @@ ops_cls_pd_statistics_get(const struct uuid              *list_id,
                           int                            num_entries,
                           struct ops_cls_pd_list_status  *status)
 {
+    int idx = 0;
+    struct acl_hashmap *acl;
+    struct port2acl *p2acl;
+    struct ofbundle *bundle;
+    struct sim_provider_ofport *ofport, *next_port;
+    struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
+    ofp_port_t port;
+    bool port_found = false;
+
     VLOG_DBG("%s called\n", __func__);
+
+    if (statistics == NULL) {
+       VLOG_ERR("%s called with NULL statistics pointer\n",__func__);
+       return -1;
+    }
+
+    /* Find the ACL */
+    acl = acl_lookup_by_uuid(list_id);
+    if (!acl) {
+        VLOG_ERR("Cannot find the ACL "UUID_FMT", name = %s\n",
+            UUID_ARGS(list_id), list_name);
+        return -1;
+    }
+
+    /* Find the port */
+    bundle = bundle_lookup(ofproto_sim, aux);
+    if (!bundle) {
+        VLOG_ERR("Bundle not found\n");
+        return -1;
+    }
+
+    LIST_FOR_EACH_SAFE(ofport, next_port, bundle_node, &bundle->ports) {
+        port = ofport->up.ofp_port;
+        port_found = true;
+        break;
+    }
+
+    /* Search for the port2acl binding */
+    if (port_found) {
+        HMAP_FOR_EACH_IN_BUCKET(p2acl, list_node, uuid_hash(list_id),
+            &all_port_applications) {
+            if (p2acl->port == port) {
+                break;
+            }
+        }
+
+        if (p2acl) {
+            for (idx = 0; idx < num_entries; idx++) {
+                statistics[idx].stats_enabled = p2acl->stats[idx].stats_enabled;
+                if (statistics[idx].stats_enabled) {
+                    /* update hitcount using random number between 0 to 9 */
+                    p2acl->stats[idx].hitcounts += random_uint64() % 10;
+                    /* set result parameter */
+                    statistics[idx].hitcounts = p2acl->stats[idx].hitcounts;
+                }
+            }
+            status->status_code = OPS_CLS_STATUS_SUCCESS;
+        } else {
+            VLOG_DBG("port2acl binding not found\n");
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -571,7 +641,58 @@ ops_cls_pd_statistics_clear(const struct uuid               *list_id,
                             enum ops_cls_direction          direction,
                             struct ops_cls_pd_list_status   *status)
 {
+    int idx = 0;
+    struct acl_hashmap *acl;
+    struct port2acl *p2acl;
+    struct ofbundle *bundle;
+    struct sim_provider_ofport *ofport, *next_port;
+    struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
+    ofp_port_t port;
+    bool port_found = false;
+
     VLOG_DBG("%s called\n", __func__);
+    /* Find the ACL */
+    acl = acl_lookup_by_uuid(list_id);
+    if (!acl) {
+        VLOG_ERR("Cannot find the ACL "UUID_FMT", name = %s\n",
+            UUID_ARGS(list_id), list_name);
+        return -1;
+    }
+
+    /* Find the port */
+    bundle = bundle_lookup(ofproto_sim, aux);
+    if (!bundle) {
+        VLOG_ERR("Bundle not found\n");
+        return -1;
+    }
+
+    LIST_FOR_EACH_SAFE(ofport, next_port, bundle_node, &bundle->ports) {
+        port = ofport->up.ofp_port;
+        port_found = true;
+        break;
+    }
+
+    /* Search for the port2acl binding */
+    if (port_found) {
+        HMAP_FOR_EACH_IN_BUCKET(p2acl, list_node, uuid_hash(list_id),
+            &all_port_applications) {
+            if (p2acl->port == port) {
+                break;
+            }
+        }
+
+        if (p2acl) {
+            for (idx = 0; idx < MAX_ACE_ENTRIES; idx++) {
+                /* clear hitcounts */
+                p2acl->stats[idx].hitcounts = 0;
+            }
+            status->status_code = OPS_CLS_STATUS_SUCCESS;
+        } else {
+            VLOG_DBG("port2acl binding not found\n");
+            return -1;
+        }
+    }
+
     return 0;
 }
 
