@@ -20,6 +20,7 @@
 #include "ofproto/ofproto-provider.h"
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
+#include "netdev-vport-sim.h"
 
 #define init libovs_sim_plugin_LTX_init
 #define run libovs_sim_plugin_LTX_run
@@ -90,6 +91,7 @@ void
 netdev_register(void)
 {
     netdev_sim_register();
+    netdev_vport_sim_register();
 }
 
 void

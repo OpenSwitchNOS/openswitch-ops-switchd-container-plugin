@@ -41,6 +41,7 @@ VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
 #define MAX_CMD_LEN             2048
 #define SWNS_EXEC               "/sbin/ip netns exec swns"
+#define VTEP_SIM   1
 
 static struct sim_provider_ofport *
 sim_provider_ofport_cast(const struct ofport *ofport)
@@ -151,13 +152,22 @@ construct(struct ofproto *ofproto_)
      * port with the same name. The port will be 'internal' type. */
     if (strcmp(ofproto_->type, "system") == 0) {
 /* RICKY: FIXME  Do we need to pass "datapath_type=netdev" in the command args? */
-        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s -- set bridge %s datapath_type=netdev",
+#ifdef VTEP_SIM
+        /*  Tunnel virtual not working if datapath_type=netdev */
+        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s",
+                     OVS_VSCTL, ofproto->up.name);
+
+#else
+        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s -- set br %s datapath_type=netdev",
                  OVS_VSCTL, ofproto->up.name, ofproto->up.name);
+
+#endif
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to add bridge in ASIC OVS. cmd=%s, rc=%s",
                      cmd_str, strerror(errno));
             error = 1;
         }
+
 
         snprintf(cmd_str, MAX_CMD_LEN, "%s set port %s trunks=0",
                  OVS_VSCTL, ofproto->up.name);
@@ -304,7 +314,7 @@ port_destruct(struct ofport *port_ OVS_UNUSED)
     int error = 0;
     char cmd_str[MAX_CMD_LEN];
 
-    if(!strcmp(devtype,"vxlan") )
+    if(!strcmp(devtype,OVSREC_INTERFACE_TYPE_VXLAN) )
     {
       snprintf(cmd_str, MAX_CMD_LEN, "%s del-port %s %s", OVS_VSCTL,br_name,devname);
       if(system(cmd_str) != 0)
@@ -773,6 +783,10 @@ found:     ;
             type = netdev_get_type(port->up.netdev);
         }
 
+        if ((type != NULL)
+            && (strcmp(type, OVSREC_INTERFACE_TYPE_VXLAN) == 0) ) {
+            return 0;
+        }
         /* Configure trunk for bridge interface so we receive vlan frames on
          * internal vlan interfaces created on top of bridge. Skip this for
          * internal interface is bridge internal interface with same name as
@@ -992,20 +1006,29 @@ port_sim_add( struct netdev *netdev, char *br)
 {
     int error = 0;
     char cmd_str[MAX_CMD_LEN];
-    struct eth_addr *mac;
+    struct eth_addr mac;
     char mac_string[32];
     const char *devname = netdev_get_name(netdev);
     const char *devtype = netdev_get_type(netdev);
-
-    if(!strcmp(devtype,"vxlan")) {
+    if(!strcmp(devtype, OVSREC_INTERFACE_TYPE_VXLAN)) {
         const struct netdev_tunnel_config *tnl_cfg = netdev_get_tunnel_config(netdev);
         if (tnl_cfg) {
             char buf[INET_ADDRSTRLEN];
+            char tunnel_key[32];
+            if(tnl_cfg->in_key_present)
+            {
+                if(tnl_cfg->in_key_flow) {
+                    strcpy(tunnel_key,"flow");
+                } else {
+                    snprintf(tunnel_key, 32,"%llu", htonll(tnl_cfg->in_key));
+                }
+            }
             ovs_be32 ip_dst = in6_addr_get_mapped_ipv4(&tnl_cfg->ipv6_dst);
             inet_ntop (AF_INET, &ip_dst, buf, INET_ADDRSTRLEN);
             snprintf(cmd_str, MAX_CMD_LEN, "%s add-port %s %s "
-                 "-- set interface %s type=%s option:remote_ip=%s option:key=flow ofport_request=10",
-                 OVS_VSCTL, br, devname, devname,devtype,buf);
+                 "-- set interface %s type=%s option:remote_ip=%s option:key=%s",
+                 OVS_VSCTL, br, devname, devname,devtype,buf,tunnel_key);
+            VLOG_DBG("%s %s", __FUNCTION__, cmd_str);
             if (system(cmd_str) != 0) {
                VLOG_ERR("Failed to add port in ASIC OVS. cmd=%s, rc=%s",
                  cmd_str, strerror(errno));
@@ -1013,9 +1036,9 @@ port_sim_add( struct netdev *netdev, char *br)
             }
         }
 
-       error = netdev_get_etheraddr(netdev, mac);
+       error = netdev_get_etheraddr(netdev, &mac);
        if (!error) {
-           sprintf(mac_string, ETH_ADDR_FMT, mac->ea );
+           sprintf(mac_string, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
            VLOG_INFO("%s mac_address %s ",__FUNCTION__, mac_string);
 
        }

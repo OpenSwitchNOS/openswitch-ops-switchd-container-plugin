@@ -35,7 +35,6 @@
 #include "openvswitch/vlog.h"
 #include "netdev-sim.h"
 #include "ovs-atomic.h"
-#include "netdev-vport-sim.h"
 
 #define SWNS_EXEC       "/sbin/ip netns exec swns"
 
@@ -712,8 +711,6 @@ netdev_sim_register(void)
     netdev_register_provider(&sim_internal_class);
     netdev_register_provider(&sim_subinterface_class);
     netdev_register_provider(&sim_loopback_class);
-    netdev_vport_sim_register();
-
 }
 
 static void
