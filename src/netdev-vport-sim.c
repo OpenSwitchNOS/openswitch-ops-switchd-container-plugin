@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
- * Copyright (C) 2015 Hewlett-Packard Development Company, L.P.
+ * Copyright (c) 2015 Hewlett Packard Development Company LP
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -372,7 +372,6 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args)
 
     SMAP_FOR_EACH (node, args) {
         if (!strcmp(node->key, "remote_ip")) {
-            VLOG_INFO("set_tunnel_config remote_IP %s",node->value);
             int err;
             err = parse_tunnel_ip(node->value, false, &tnl_cfg.ip_dst_flow,
                                   &tnl_cfg.ipv6_dst, &dst_proto);
@@ -384,8 +383,6 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args)
                 VLOG_WARN("%s: multicast remote_ip=%s not allowed",
                           name, node->value);
                 return EINVAL;
-            } else {
-                tnl_cfg.ip_dst = in_addr.s_addr;
             }
         } else if (!strcmp(node->key, "local_ip")) {
             int err;
@@ -520,7 +517,6 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args)
     tnl_cfg.out_key = parse_key(args, "out_key",
                                &tnl_cfg.out_key_present,
                                &tnl_cfg.out_key_flow);
-
     ovs_mutex_lock(&dev->mutex);
     if (memcmp(&dev->tnl_cfg, &tnl_cfg, sizeof tnl_cfg)) {
         dev->tnl_cfg = tnl_cfg;
@@ -528,7 +524,6 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args)
         netdev_change_seq_changed(dev_);
     }
     ovs_mutex_unlock(&dev->mutex);
-
     return 0;
 }
 

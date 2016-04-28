@@ -62,7 +62,7 @@ class mytopo(Topo):
         self.addLink('h4', 's2')
         self.addLink('s1', 's2')
 
-class vlanTagTest( OpsVsiTest ):
+class vxlanTest( OpsVsiTest ):
 
     def setupNet(self):
         host_opts = self.getHostOpts()
@@ -72,15 +72,15 @@ class vlanTagTest( OpsVsiTest ):
                            host=Host, link=OpsVsiLink,
                            controller=None, build=True)
 
-    def vtep_setup(self,ip1,ip2):
+    def vtep_setup(self,ip1,ip2, br="bridge_normal",vni = "flow"):
         info("\n ### vtep_setup remote_ip for s1 %s for s2 %s ###\n" % (ip1,ip2))
         s1 = self.net.switches[ 0 ]
         s2 = self.net.switches[ 1 ]
-        s1.ovscmd(OPS_VSCTL + " add-port bridge_normal vtep -- set interface vtep type=vxlan option:remote_ip=%s" % ip1)
+        s1.ovscmd(OPS_VSCTL + " add-port %s vtep -- set interface vtep type=vxlan options:remote_ip=%s options:key=%s" % (br,ip1,vni))
         sleep(1)
-        s2.ovscmd(OPS_VSCTL + " add-port bridge_normal vtep -- set interface vtep type=vxlan option:remote_ip=%s" % ip2)
+        s2.ovscmd(OPS_VSCTL + " add-port %s vtep  -- set interface vtep type=vxlan options:remote_ip=%s options:key=%s" % (br,ip2,vni))
         '''
-        ops = s2.ovscmd(OPS_VSCTL + " show")
+        ops = s1.ovscmd(OPS_VSCTL + " show")
         ovs = s2.ovscmd(OVS_VSCTL + " show")
         info("\n \n ops-ctl \n %s \n\n ovs-ctl \n%s \n\n" % (ops, ovs))
         '''
@@ -150,8 +150,8 @@ class vlanTagTest( OpsVsiTest ):
             info("\n h1- h2 Ping failed!\n")
 
     def vxlan(self):
-        info("\n\n\n ########## testing vxlan ##########\n\n\n")
-        self.vtep_setup(SW_ROUTERIP[1], SW_ROUTERIP[0])
+        info("\n\n\n ########## testing vxlan standalone mode ##########\n\n\n")
+        self.vtep_setup(SW_ROUTERIP[1], SW_ROUTERIP[0], "bridge_normal", "100")
         self.tcpdump_setup()
         self.conf_access_port("1", "100")
         self.conf_net_port("3")
@@ -161,7 +161,7 @@ class vlanTagTest( OpsVsiTest ):
 class Test_switchd_container_vlan_access:
 
     def setup_class(cls):
-        Test_switchd_container_vlan_access.test = vlanTagTest()
+        Test_switchd_container_vlan_access.test = vxlanTest()
 
     # TC_1
     def test_switchd_container_check_config(self):
