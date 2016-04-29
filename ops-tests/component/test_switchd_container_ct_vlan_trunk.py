@@ -40,7 +40,6 @@ ops1:if02 -- ops2:if02
 
 
 @mark.platform_incompatible(['ostl'])
-@mark.skipif(True, reason="skipping test case due to stability issues in CIT")
 def test_switchd_container_ct_vlan_trunk(topology, step):
     ops1 = topology.get("ops1")
     ops2 = topology.get("ops2")
