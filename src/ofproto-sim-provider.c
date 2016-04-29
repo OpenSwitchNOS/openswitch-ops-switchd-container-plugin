@@ -41,7 +41,7 @@ VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 
 #define MAX_CMD_LEN             2048
 #define SWNS_EXEC               "/sbin/ip netns exec swns"
-#define VTEP_SIM   1
+#define SIM_USER_SPACE_MODE   1
 
 static struct sim_provider_ofport *
 sim_provider_ofport_cast(const struct ofport *ofport)
@@ -152,16 +152,16 @@ construct(struct ofproto *ofproto_)
      * port with the same name. The port will be 'internal' type. */
     if (strcmp(ofproto_->type, "system") == 0) {
 /* RICKY: FIXME  Do we need to pass "datapath_type=netdev" in the command args? */
-#ifdef VTEP_SIM
-        /*  Tunnel virtual not working if datapath_type=netdev */
-        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s",
-                     OVS_VSCTL, ofproto->up.name);
+#ifdef SIM_USER_SPACE_MODE
+        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s -- set br %s datapath_type=netdev",
+                     OVS_VSCTL, ofproto->up.name, ofproto->up.name);
 
 #else
-        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s -- set br %s datapath_type=netdev",
-                 OVS_VSCTL, ofproto->up.name, ofproto->up.name);
+        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s",
+                 OVS_VSCTL, ofproto->up.name);
 
 #endif
+
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to add bridge in ASIC OVS. cmd=%s, rc=%s",
                      cmd_str, strerror(errno));
