@@ -171,6 +171,7 @@ struct sim_sflow_cfg {
     uint32_t max_datagram;     /* Maximum size of sFlow datagram */
     char *agent_device;        /* Agent Interface (IP address that is used
                                   in sFlow datagram) */
+    char *agent_ip;            /* Agent IP coming from ops-switchd */
     bool set;
     bool disabled;             /* sFlow is disabled */
 };
