@@ -1118,8 +1118,7 @@ mirror_set(struct ofproto *ofproto_, void *aux,
 
         if (hmapx_equals(&srcs_map, &mirror->srcs)
                 && hmapx_equals(&dsts_map, &mirror->dsts)
-                && vlan_bitmap_equal(mirror->vlans, s->src_vlans)
-                && mirror->out == out && mirror->out_vlan == s->out_vlan) {
+                && mirror->out == out) {
             /* If the configuration has not changed, do nothing. */
             hmapx_destroy(&srcs_map);
             hmapx_destroy(&dsts_map);
@@ -1140,11 +1139,7 @@ mirror_set(struct ofproto *ofproto_, void *aux,
         hmapx_swap(&dsts_map, &mirror->dsts);
         hmapx_destroy(&dsts_map);
 
-        free(mirror->vlans);
-        mirror->vlans = vlan_bitmap_clone(s->src_vlans);
-
         mirror->out = out;
-        mirror->out_vlan = s->out_vlan;
 
         mbridge->has_mirrors = true;
 
