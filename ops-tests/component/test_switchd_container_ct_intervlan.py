@@ -39,7 +39,6 @@ ops1:if02 -- hs2:if01
 
 
 @mark.platform_incompatible(['ostl'])
-@mark.skipif(True, reason="skipping test case due to stability issues in CIT")
 def test_switchd_container_ct_intervlan(topology, step):
     ops1 = topology.get("ops1")
     hs1 = topology.get("hs1")
@@ -127,8 +126,9 @@ def test_switchd_container_ct_intervlan(topology, step):
     ping6 = hs1("ping6 -c 2 200::2")
     assert "2 packets transmitted, 0 received" in ping6
 
-    with ops1.libs.vtysh.ConfigVlan("100") as ctx:
+    with ops1.libs.vtysh.ConfigInterfaceVlan("100") as ctx:
         ctx.no_shutdown()
+
     sleep(5)
 
     admin_state, link_state = ops1("get interface vlan100 "
@@ -137,7 +137,7 @@ def test_switchd_container_ct_intervlan(topology, step):
 
     assert "up" in admin_state and "up" in link_state
 
-    with ops1.libs.vtysh.ConfigVlan("100") as ctx:
+    with ops1.libs.vtysh.ConfigInterfaceVlan("100") as ctx:
         ctx.shutdown()
 
     admin_state, link_state = ops1("get interface vlan100 "
