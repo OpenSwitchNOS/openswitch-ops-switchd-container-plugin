@@ -81,7 +81,7 @@ void sim_copp_init(void) {
     size_t readSize = MAX_ROW_LEN;
     ssize_t nRead = 0;
     FILE *devFile;
-    char *rowStr = malloc(MAX_ROW_LEN);
+    char *rowStr;
 
     VLOG_DBG("%s: hw_asic_id is %d, Protocol_Class: %d", __FUNCTION__, hw_asic_id, class);
     /* look at /proc/net/dev and sum the rx packets, bytes, and dropped packets.  Set
@@ -103,10 +103,10 @@ void sim_copp_init(void) {
     if (devFile == NULL) {
         VLOG_ERR("%s: Failed to open /proc/net/dev for copp stats, error '%s'",
                     __FUNCTION__, strerror(errno));
-        free(rowStr);
         return errno;
     }
 
+    rowStr = xzalloc(MAX_ROW_LEN);
     do {
         rowNum++;
         nRead = getline(&rowStr, &readSize, devFile);
