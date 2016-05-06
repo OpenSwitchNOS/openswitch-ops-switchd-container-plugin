@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2010, 2011, 2012, 2013 Nicira, Inc.
- * Copyright (C) 2015, 2016 Hewlett-Packard Development Company, L.P.
+ * Copyright (c) 2015-2016 Hewlett Packard Enterprise Development LP
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,9 @@
  */
 
 #include <config.h>
+
+#include "netdev-sim.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -30,15 +33,13 @@
 #include <netinet/in.h>
 #include <net/if.h>
 
-#include <openswitch-idl.h>
-
+#include "openswitch-idl.h"
 #include "openvswitch/vlog.h"
-#include "netdev-sim.h"
 #include "ovs-atomic.h"
 
-#define SWNS_EXEC       "/sbin/ip netns exec swns"
-
 VLOG_DEFINE_THIS_MODULE(netdev_sim);
+
+#define NUM_QUEUES 8
 
 /* Protects 'sim_list'. */
 static struct ovs_mutex sim_list_mutex = OVS_MUTEX_INITIALIZER;
@@ -69,6 +70,24 @@ struct netdev_sim {
     bool autoneg;
     bool pause_tx;
     bool pause_rx;
+
+    /* used for maintaining L3 sflow stats */
+    bool     sflow_stats_enabled;
+    uint32_t sflow_resets;
+    uint64_t sflow_prev_ingress_pkts;
+    uint64_t sflow_prev_ingress_bytes;
+    uint64_t sflow_prev_egress_pkts;
+    uint64_t sflow_prev_egress_bytes;
+
+    /* used for maintaining general L3 stats */
+    bool l3_stats_enabled;
+};
+
+struct kernel_l3_stats {
+    uint64_t uc_packets;
+    uint64_t uc_bytes;
+    uint64_t mc_packets;
+    uint64_t mc_bytes;
 };
 
 static int netdev_sim_construct(struct netdev *);
@@ -78,6 +97,9 @@ netdev_parse_netlink_msg(struct nlmsghdr *h, struct netdev_stats *stats);
 
 static int
 netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats);
+
+static int
+netdev_sim_get_kernel_l3_stats(const char *if_name, struct netdev_stats *stats);
 
 static bool
 is_sim_class(const struct netdev_class *class)
@@ -119,6 +141,13 @@ netdev_sim_construct(struct netdev *netdev_)
     netdev->mtu = 1500;
     netdev->flags = 0;
     netdev->link_state = 0;
+    netdev->sflow_resets = 0;
+    netdev->sflow_stats_enabled = false;
+    netdev->sflow_prev_ingress_pkts = 0;
+    netdev->sflow_prev_ingress_bytes = 0;
+    netdev->sflow_prev_egress_pkts = 0;
+    netdev->sflow_prev_egress_bytes = 0;
+    netdev->l3_stats_enabled = false;
 
     ovs_mutex_unlock(&netdev->mutex);
 
@@ -323,10 +352,137 @@ netdev_sim_get_etheraddr(const struct netdev *netdev,
     return 0;
 }
 
+/* Gets the sflow counters from iptable rules. They get reset to zero when
+ * sflow gets disabled and re-enabled.
+ */
+static void
+netdev_sim_get_iptable_stats(char *port, bool ingress, uint64_t *pkts,
+                             uint64_t *bytes)
+{
+    FILE *fp;
+    char cmd_str[MAX_CMD_LEN];
+    char buffer[16] = {0};
+
+    *pkts = 0;
+    *bytes = 0;
+    snprintf(cmd_str, sizeof(cmd_str), "%s iptables -S -v | grep SFLOW | grep '%c %s' "
+             "| awk -F ' ' '{print $12}' | awk '{ sum+=$1} END {print sum}'",
+             SWNS_EXEC, ingress ? 'i' : 'o', port);
+    fp = popen(cmd_str, "r");
+    fgets(buffer, sizeof(buffer), fp);
+    *pkts = atoll(buffer);
+    pclose(fp);
+
+    snprintf(cmd_str, sizeof(cmd_str), "%s iptables -S -v | grep SFLOW | grep '%c %s' "
+             "| awk -F ' ' '{print $13}' | awk '{ sum+=$1} END {print sum}'",
+             SWNS_EXEC, ingress ? 'i' : 'o', port);
+    fp = popen(cmd_str, "r");
+    fgets(buffer, sizeof(buffer), fp);
+    *bytes = atoll(buffer);
+    pclose(fp);
+
+}
+
+static void
+netdev_sim_update_sflow_stats(struct netdev_sim *netdev)
+{
+    uint64_t in_pkts = 0, in_bytes = 0;
+    uint64_t out_pkts = 0, out_bytes = 0;
+
+    if (netdev->sflow_stats_enabled) {
+        netdev_sim_get_iptable_stats(netdev->up.name, true,
+                                     &in_pkts, &in_bytes);
+        netdev_sim_get_iptable_stats(netdev->up.name, false,
+                                     &out_pkts, &out_bytes);
+    }
+
+    ovs_mutex_lock(&netdev->mutex);
+
+    /* Note: sFlow stats is only supported for L3 interfaces because sampling in
+       L2 interfaces is done in sim OVS which does not offer statistics. */
+
+    if (netdev->sflow_resets > 0 ||
+        netdev->sflow_prev_ingress_pkts > in_pkts ||
+        netdev->sflow_prev_egress_pkts > out_pkts) {
+        /* This part of the code is run when sflow is enabled/disabled
+           on an interface(s). When sflow is disabled, the iptable rules
+           are removed. So the next time the interface shows up (sFlow was enabled
+           on it again), the number of packets from iptables must be added
+           directly with the existing count. */
+        netdev->stats.sflow_ingress_packets += in_pkts;
+        netdev->stats.sflow_ingress_bytes += in_bytes;
+        netdev->stats.sflow_egress_packets += out_pkts;
+        netdev->stats.sflow_egress_bytes += out_bytes;
+    } else {
+        /* This is the normal flow. After getting the stats from iptable
+           rules, we need to get the delta (i.e. Number of packets
+           from the iptable rules - Number of packets previously written
+           to the DB) */
+        netdev->stats.sflow_ingress_packets += in_pkts -
+                                            netdev->sflow_prev_ingress_pkts;
+        netdev->stats.sflow_ingress_bytes += in_bytes -
+                                            netdev->sflow_prev_ingress_bytes;
+        netdev->stats.sflow_egress_packets += out_pkts -
+                                            netdev->sflow_prev_egress_pkts;
+        netdev->stats.sflow_egress_bytes += out_bytes -
+                                            netdev->sflow_prev_egress_bytes;
+    }
+
+    /* Update the previous counters so that we can find delta in next run */
+    netdev->sflow_prev_ingress_pkts = in_pkts;
+    netdev->sflow_prev_ingress_bytes = in_bytes;
+    netdev->sflow_prev_egress_pkts = out_pkts;
+    netdev->sflow_prev_egress_bytes = out_bytes;
+    netdev->sflow_resets = 0;
+
+    ovs_mutex_unlock(&netdev->mutex);
+}
+
+int
+netdev_sim_dump_queue_stats(const struct netdev* netdev,
+                            netdev_dump_queue_stats_cb* cb,
+                            void* aux)
+{
+    /* static struct that mimics stateful hardware stats data */
+    static struct netdev_queue_stats lstats[NUM_QUEUES];
+
+    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    int q = 0;
+
+    ovs_mutex_lock(&dev->mutex);
+
+    for (q=0; q<NUM_QUEUES; q++) {
+
+        /* fake queue stats increase */
+        if (lstats[q].tx_bytes == 0)
+            lstats[q].tx_bytes = q+1;
+        else
+            lstats[q].tx_bytes += 10;
+
+        if (lstats[q].tx_packets == 0)
+            lstats[q].tx_packets = q+1;
+        else
+            lstats[q].tx_packets += 10;
+
+        if (lstats[q].tx_errors == 0)
+            lstats[q].tx_errors = q+1;
+        else
+            lstats[q].tx_errors += 10;
+
+        /* punt our PI qstats array on through aux */
+        (*cb)(q, &lstats[q], aux);
+    }
+
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
 static int
 netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
+
     int rc = 0;
     rc = netdev_get_kernel_stats(dev->linux_intf_name, &dev->stats);
     if (rc < 0)
@@ -334,6 +490,17 @@ netdev_sim_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
         VLOG_ERR("Failed to get interface statistics for interface %s", dev->linux_intf_name);
         return -1;
     }
+
+    /* If L3 stats are enabled fetch statistics from iptables*/
+    if (dev->l3_stats_enabled) {
+        rc = netdev_sim_get_kernel_l3_stats(dev->linux_intf_name, &dev->stats);
+        if (rc < 0) {
+            VLOG_ERR("Failed to get L3 interface statistics for interface %s", dev->linux_intf_name);
+            return -1;
+        }
+    }
+
+    netdev_sim_update_sflow_stats(dev);
     ovs_mutex_lock(&dev->mutex);
     *stats = dev->stats;
     ovs_mutex_unlock(&dev->mutex);
@@ -473,7 +640,7 @@ static const struct netdev_class sim_class = {
     NULL,                       /* queue_dump_start */
     NULL,                       /* queue_dump_next */
     NULL,                       /* queue_dump_done */
-    NULL,                       /* dump_queue_stats */
+    netdev_sim_dump_queue_stats,/* dump_queue_stats */
 
     NULL,                       /* get_in4 */
     NULL,                       /* set_in4 */
@@ -543,7 +710,7 @@ static const struct netdev_class sim_internal_class = {
     NULL,                       /* queue_dump_start */
     NULL,                       /* queue_dump_next */
     NULL,                       /* queue_dump_done */
-    NULL,                       /* dump_queue_stats */
+    netdev_sim_dump_queue_stats,/* dump_queue_stats */
 
     NULL,                       /* get_in4 */
     NULL,                       /* set_in4 */
@@ -713,6 +880,174 @@ netdev_sim_register(void)
     netdev_register_provider(&sim_loopback_class);
 }
 
+static bool
+netdev_sim_l3stats_xtables_rule_installed(const char *if_name,
+                                          const char *xtables_cmd,
+                                          const char *chain,
+                                          const char *pkttype)
+{
+    char cmd[256];
+    int rc = 0;
+    if (!strcmp(chain, "FORWARD")) {
+        snprintf(cmd, sizeof(cmd), "%s %s -C %s -i %s -m pkttype --pkt-type %s",
+                SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+        rc = system(cmd);
+        if (rc != 0) {
+            return false;
+        }
+        snprintf(cmd, sizeof(cmd), "%s %s -C %s -o %s -m pkttype --pkt-type %s",
+                SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+        rc = system(cmd);
+        if (rc != 0) {
+            return false;
+        }
+        return true;
+    }
+
+    char filter = !strcmp(chain, "INPUT") ? 'i' : 'o';
+    snprintf(cmd, sizeof(cmd), "%s %s -C %s -%c %s -m pkttype --pkt-type %s",
+            SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
+    rc = system(cmd);
+    if (rc != 0) {
+        return false;
+    }
+    return true;
+}
+
+static int
+netdev_sim_l3stats_add_rule(const char *if_name, const char *xtables_cmd,
+                            const char *chain, const char *pkttype)
+{
+    char cmd[256];
+    int rc = 0;
+
+    if (!strcmp(chain, "FORWARD")) {
+        if (!netdev_sim_l3stats_xtables_rule_installed(if_name,
+                                                       xtables_cmd, chain,
+                                                       pkttype)) {
+            snprintf(cmd, sizeof(cmd), "%s %s -A %s -i %s -m pkttype --pkt-type %s",
+                    SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+            rc = system(cmd);
+            if (rc != 0) {
+                VLOG_DBG("Failed to execute - %s (rc=%d)", cmd, rc);
+            }
+            snprintf(cmd, sizeof(cmd), "%s %s -A %s -o %s -m pkttype --pkt-type %s",
+                    SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+            rc = system(cmd);
+            if (rc != 0) {
+                VLOG_DBG("Failed to execute - %s (rc=%d)", cmd, rc);
+            }
+        }
+        return rc;
+    }
+
+    char filter = !strcmp(chain, "INPUT") ? 'i' : 'o';
+
+    /* Add rule if it does not exist */
+    if (!netdev_sim_l3stats_xtables_rule_installed(if_name,
+                                                   xtables_cmd, chain,
+                                                   pkttype)) {
+        snprintf(cmd, sizeof(cmd), "%s %s -A %s -%c %s -m pkttype --pkt-type %s",
+                SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
+        rc = system(cmd);
+        if (rc != 0) {
+            VLOG_DBG("Failed to execute - %s (rc=%d)", cmd, rc);
+        }
+    }
+    return rc;
+}
+
+static int
+netdev_sim_l3stats_delete_rule(const char *if_name, const char *xtables_cmd,
+                               const char *chain, const char *pkttype)
+{
+    char cmd[256];
+    int rc = 0;
+
+    if (!strcmp(chain, "FORWARD")) {
+        if (netdev_sim_l3stats_xtables_rule_installed(if_name,
+                                                      xtables_cmd,
+                                                      chain, pkttype)) {
+            snprintf(cmd, sizeof(cmd), "%s %s -D %s -i %s -m pkttype --pkt-type %s",
+                    SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+            rc = system(cmd);
+            if (rc != 0) {
+                VLOG_DBG("Failed to execute - %s (rc=%d)", cmd, rc);
+            }
+            snprintf(cmd, sizeof(cmd), "%s %s -D %s -o %s -m pkttype --pkt-type %s",
+                    SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
+            rc = system(cmd);
+            if (rc != 0) {
+                VLOG_DBG("Failed to execute - %s (rc=%d)", cmd, rc);
+            }
+        }
+        return rc;
+    }
+    char filter = !strcmp(chain, "INPUT") ? 'i' : 'o';
+
+    /* Delete rule if it exists */
+    if (netdev_sim_l3stats_xtables_rule_installed(if_name, xtables_cmd,
+                                                  chain, pkttype)) {
+        snprintf(cmd, sizeof(cmd), "%s %s -D %s -%c %s -m pkttype --pkt-type %s",
+                SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
+        rc = system(cmd);
+        if (rc != 0) {
+            VLOG_DBG("Failed to execute - %s (rc=%d)", cmd, rc);
+        }
+    }
+    return rc;
+}
+
+void
+netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
+{
+    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    if (dev->l3_stats_enabled) {
+        return;
+    }
+
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "multicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "INPUT", "unicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "INPUT", "multicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "OUTPUT", "unicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "OUTPUT", "multicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "OUTPUT", "unicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "OUTPUT", "multicast");
+
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "FORWARD", "unicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "FORWARD", "multicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "unicast");
+    netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
+
+    dev->l3_stats_enabled = true;
+}
+
+void
+netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
+{
+    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    if (!dev->l3_stats_enabled) {
+        return;
+    }
+
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "INPUT", "multicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "INPUT", "unicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "INPUT", "multicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "OUTPUT", "unicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "OUTPUT", "multicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "OUTPUT", "unicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "OUTPUT", "multicast");
+
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "FORWARD", "unicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "FORWARD", "multicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "unicast");
+    netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
+
+    dev->l3_stats_enabled = false;
+}
+
 static void
 netdev_parse_netlink_msg(struct nlmsghdr *h, struct netdev_stats *stats)
 {
@@ -856,4 +1191,162 @@ netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats)
     close(sock);
 
     return 0;
+}
+
+static int
+netdev_sim_parse_iptables_stats_line(FILE *fp, const char *if_name,
+                                     uint64_t *packets, uint64_t *bytes)
+{
+    char stats_str[64];
+    *packets = 0;
+    *bytes = 0;
+    if (fgets(stats_str, sizeof(stats_str)-1, fp)) {
+        if (sscanf(stats_str, "%"PRIu64"%"PRIu64, packets, bytes) < 2) {
+            VLOG_DBG("Failed to parse from iptables command for L3 interface %s", if_name);
+            *packets = 0;
+            *bytes = 0;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
+netdev_sim_parse_xtables_l3_stats(const char *if_name,
+                                  struct kernel_l3_stats *kernel_stats,
+                                  bool is_v6,
+                                  bool is_ingress)
+{
+    FILE *fp;
+    char cmd[256];
+    uint64_t packets = 0;
+    uint64_t bytes = 0;
+
+    if (is_ingress) {
+        /* Get L3 RX stats */
+        snprintf(cmd, sizeof(cmd), "%s %s -S -v | awk '$3 == \"-i\" && $4 == \"%s\" && $6 == \"pkttype\"{print $10,$11}'",
+                 SWNS_EXEC, is_v6 ? "ip6tables" : "iptables" , if_name);
+    } else {
+        /* Get L3 TX stats */
+        snprintf(cmd, sizeof(cmd), "%s %s -S -v | awk '$3 == \"-o\" && $4 == \"%s\" && $6 == \"pkttype\"{print $10,$11}'",
+                 SWNS_EXEC, is_v6 ? "ip6tables" : "iptables" , if_name);
+    }
+
+    /* Open the command for reading. */
+    fp = popen(cmd, "r");
+    if (fp == NULL) {
+        VLOG_DBG("Failed to open pipe for command %s", cmd);
+        return -1;
+    }
+
+    /* Read the output lines and parse the statistics */
+    netdev_sim_parse_iptables_stats_line(fp, if_name, &packets, &bytes);
+    kernel_stats->uc_packets = packets;
+    kernel_stats->uc_bytes = bytes;
+
+    netdev_sim_parse_iptables_stats_line(fp, if_name, &packets, &bytes);
+    kernel_stats->mc_packets = packets;
+    kernel_stats->mc_bytes = bytes;
+
+    /* Adding packets and bytes for forwarded traffic */
+    netdev_sim_parse_iptables_stats_line(fp, if_name, &packets, &bytes);
+    kernel_stats->uc_packets += packets;
+    kernel_stats->uc_bytes += bytes;
+
+    netdev_sim_parse_iptables_stats_line(fp, if_name, &packets, &bytes);
+    kernel_stats->mc_packets += packets;
+    kernel_stats->mc_bytes += bytes;
+
+    pclose(fp);
+    return 0;
+}
+
+static int
+netdev_sim_get_kernel_l3_stats(const char *if_name, struct netdev_stats *stats)
+{
+    int rc = 0;
+    struct kernel_l3_stats kernel_stats;
+
+    memset(&kernel_stats, 0, sizeof(kernel_stats));
+
+    /* IPV4 stats */
+    rc = netdev_sim_parse_xtables_l3_stats(if_name, &kernel_stats, false, true);
+    if (rc < 0) {
+        return rc;
+    }
+    stats->ipv4_uc_rx_packets = kernel_stats.uc_packets;
+    stats->ipv4_mc_rx_packets = kernel_stats.mc_packets;
+    stats->ipv4_uc_rx_bytes = kernel_stats.uc_bytes;
+    stats->ipv4_mc_rx_bytes = kernel_stats.mc_bytes;
+
+
+    rc = netdev_sim_parse_xtables_l3_stats(if_name, &kernel_stats, false, false);
+    if (rc < 0) {
+        return rc;
+    }
+    stats->ipv4_uc_tx_packets = kernel_stats.uc_packets;
+    stats->ipv4_mc_tx_packets = kernel_stats.mc_packets;
+    stats->ipv4_uc_tx_bytes = kernel_stats.uc_bytes;
+    stats->ipv4_mc_tx_bytes = kernel_stats.mc_bytes;
+
+
+    /* IPV6 stats */
+
+    rc = netdev_sim_parse_xtables_l3_stats(if_name, &kernel_stats, true, true);
+    if (rc < 0) {
+        return rc;
+    }
+    stats->ipv6_uc_rx_packets = kernel_stats.uc_packets;
+    stats->ipv6_mc_rx_packets = kernel_stats.mc_packets;
+    stats->ipv6_uc_rx_bytes = kernel_stats.uc_bytes;
+    stats->ipv6_mc_rx_bytes = kernel_stats.mc_bytes;
+
+
+    rc = netdev_sim_parse_xtables_l3_stats(if_name, &kernel_stats, true, false);
+    if (rc < 0) {
+        return rc;
+    }
+    stats->ipv6_uc_tx_packets = kernel_stats.uc_packets;
+    stats->ipv6_mc_tx_packets = kernel_stats.mc_packets;
+    stats->ipv6_uc_tx_bytes = kernel_stats.uc_bytes;
+    stats->ipv6_mc_tx_bytes = kernel_stats.mc_bytes;
+
+
+    /* Global L3 stats */
+    stats->l3_uc_tx_packets = stats->ipv4_uc_tx_packets + stats->ipv6_uc_tx_packets;
+    stats->l3_mc_tx_packets = stats->ipv4_mc_tx_packets + stats->ipv6_mc_tx_packets;
+    stats->l3_uc_tx_bytes = stats->ipv4_uc_tx_bytes + stats->ipv6_uc_tx_bytes;
+    stats->l3_mc_tx_bytes = stats->ipv4_mc_tx_bytes + stats->ipv6_mc_tx_bytes;
+
+    stats->l3_uc_rx_packets = stats->ipv4_uc_rx_packets + stats->ipv6_uc_rx_packets;
+    stats->l3_mc_rx_packets = stats->ipv4_mc_rx_packets + stats->ipv6_mc_rx_packets;
+    stats->l3_uc_rx_bytes = stats->ipv4_uc_rx_bytes + stats->ipv6_uc_rx_bytes;
+    stats->l3_mc_rx_bytes = stats->ipv4_mc_rx_bytes + stats->ipv6_mc_rx_bytes;
+
+    return rc;
+}
+
+/* Update iptable reconfiguration events so that netdev sflow statistics
+ * can take care of the event. This has to be done because sflow
+ * iptable rules clear the counters when sflow gets disabled, but
+ * the db counters has to keep incrementing, so we need a way to
+ * know when to add iptable counters to db and when to do a diff
+ * before adding to the db.
+ */
+void
+netdev_sflow_reset(struct netdev *netdev_)
+{
+    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
+    ovs_mutex_lock(&netdev->mutex);
+    netdev->sflow_resets++;
+    ovs_mutex_unlock(&netdev->mutex);
+}
+
+void
+netdev_sflow_stats_enable(struct netdev *netdev_, bool enabled)
+{
+    struct netdev_sim *netdev = netdev_sim_cast(netdev_);
+    ovs_mutex_lock(&netdev->mutex);
+    netdev->sflow_stats_enabled = enabled;
+    ovs_mutex_unlock(&netdev->mutex);
 }

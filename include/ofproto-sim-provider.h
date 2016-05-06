@@ -21,12 +21,62 @@
 #define OFPROTO_SIM_PROVIDER_H 1
 
 #include "ofproto/ofproto-provider.h"
+#include "hmapx.h"
 
 #define MAX_CLI                 1024
 #define OVS_VSCTL               "/opt/openvswitch/bin/ovs-vsctl"
 #define ASIC_OVSDB_PATH         "/var/run/openvswitch-sim/ovsdb.db"
 #define APPCTL                  "/opt/openvswitch/bin/ovs-appctl"
 #define OVS_SIM                 "ovs-vswitchd-sim"
+
+#define HOSTSFLOW_CFG_FILENAME  "/etc/hsflowd.conf"
+#define HOSTSFLOW_NFLOG_GRP     5
+
+#define MAX_MIRRORS 32
+#define MAX_MIRROR_NAME_LEN 64
+
+typedef uint32_t mirror_mask_t;
+
+struct mbundle {
+    struct hmap_node hmap_node; /* In parent 'mbridge' map. */
+    struct ofbundle *ofbundle;
+
+    mirror_mask_t src_mirrors;  /* Mirrors triggered when packet received. */
+    mirror_mask_t dst_mirrors;  /* Mirrors triggered when packet sent. */
+    mirror_mask_t mirror_out;   /* Mirrors that output to this mbundle. */
+};
+
+struct mirror {
+    struct mbridge *mbridge;    /* Owning ofproto. */
+    size_t idx;                 /* In ofproto's "mirrors" array. */
+    void *aux;                  /* Key supplied by ofproto's client. */
+
+    /* Selection criteria. */
+    struct hmapx srcs;          /* Contains "struct mbundle*"s. */
+    struct hmapx dsts;          /* Contains "struct mbundle*"s. */
+    unsigned long *vlans;       /* Bitmap of chosen VLANs, NULL selects all. */
+
+    /* Output (exactly one of out == NULL and out_vlan == -1 is true). */
+    struct mbundle *out;        /* Output port or NULL. */
+    int out_vlan;               /* Output VLAN or -1. */
+    mirror_mask_t dup_mirrors;  /* Bitmap of mirrors with the same output. */
+
+    /* Counters. */
+    int64_t packet_count;       /* Number of packets sent. */
+    int64_t byte_count;         /* Number of bytes sent. */
+
+    char *name; /* Mirror name for logging */
+};
+
+struct mbridge {
+    struct mirror *mirrors[MAX_MIRRORS];
+    struct hmap mbundles;
+
+    bool need_revalidate;
+    bool has_mirrors;
+
+    struct ovs_refcount ref_cnt;
+};
 
 struct sim_provider_rule {
     struct rule up;
@@ -69,6 +119,7 @@ struct ofbundle {
     bool is_vlan_routing_enabled;       /* If VLAN routing is enabled on this
                                          * bundle. */
     bool is_bridge_bundle;      /* If the bundle is internal for the bridge. */
+    bool is_sflow_enabled;      /* If slow is enabled for this bundle */
 };
 
 struct sim_provider_ofport {
@@ -107,6 +158,21 @@ struct sim_provider_ofport {
 
     bool iptable_rules_added;   /* If IP table rules added to drop L2 traffic.
                                  */
+};
+
+struct sim_sflow_cfg {
+    struct sset ports;         /* port names where sflow configuration is
+                                  applied (for VRF) */
+    struct sset targets;       /* sFlow Collectors information */
+    uint32_t sampling_rate;    /* Rate at which packets are sampled */
+    uint32_t polling_interval; /* Time interval for sending interface stats */
+    uint32_t header_len;       /* Number of header bytes included
+                                  from the sampled packets */
+    uint32_t max_datagram;     /* Maximum size of sFlow datagram */
+    char *agent_device;        /* Agent Interface (IP address that is used
+                                  in sFlow datagram) */
+    bool set;
+    bool disabled;             /* sFlow is disabled */
 };
 
 struct sim_provider_node {
@@ -166,6 +232,7 @@ struct sim_provider_node {
 
     bool vrf;                   /* Specifies whether specific ofproto instance
                                  * is backing up VRF and not bridge */
+    struct sim_sflow_cfg sflow; /* sflow configuration */
 };
 
 struct sim_provider_port_dump_state {
@@ -186,5 +253,16 @@ static void bundle_remove(struct ofport *);
 static struct sim_provider_ofport *get_ofp_port(const struct sim_provider_node
                                                 *ofproto, ofp_port_t ofp_port);
 
+static struct mirror *mirror_lookup(struct mbridge *, void *aux);
+static struct mbundle *mbundle_lookup(const struct mbridge *,
+                                      struct ofbundle *);
+static void mbundle_lookup_multiple(const struct mbridge *, struct ofbundle **,
+                                  size_t n_bundles, struct hmapx *mbundles);
+static int mirror_scan(struct mbridge *);
+static void mirror_destroy(struct mbridge *mbridge, void *aux);
+
 extern const struct ofproto_class ofproto_sim_provider_class;
+
+int register_qos_extension(void);
+
 #endif /* ofproto/ofproto-sim-provider.h */
