@@ -272,7 +272,6 @@ netdev_sim_set_config(struct netdev *netdev_, const struct smap *args)
 static int
 netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 {
-    char cmd[80];
     struct netdev_sim *netdev = netdev_sim_cast(netdev_);
     const bool hw_enable = smap_get_bool(args, INTERFACE_HW_INTF_CONFIG_MAP_ENABLE, false);
     const bool autoneg = smap_get_bool(args, INTERFACE_HW_INTF_CONFIG_MAP_AUTONEG, false);
@@ -285,8 +284,6 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
 
     VLOG_DBG("Interface=%s hw_enable=%d ", netdev->linux_intf_name, hw_enable);
 
-    memset(cmd, 0, sizeof(cmd));
-
     if (hw_enable) {
         netdev->flags |= NETDEV_UP;
         netdev->link_state = 1;
@@ -298,8 +295,6 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
         if(pause)
             get_interface_pause_config(pause, &(netdev->pause_rx), &(netdev->pause_tx));
 
-        sprintf(cmd, "%s /sbin/ip link set dev %s up",
-                SWNS_EXEC, netdev->linux_intf_name);
     } else {
         netdev->flags &= ~NETDEV_UP;
         netdev->link_state = 0;
@@ -309,11 +304,6 @@ netdev_sim_set_hw_intf_config(struct netdev *netdev_, const struct smap *args)
         netdev->pause_tx = false;
         netdev->pause_rx = false;
 
-        sprintf(cmd, "%s /sbin/ip link set dev %s down",
-                SWNS_EXEC, netdev->linux_intf_name);
-    }
-    if (system(cmd) != 0) {
-        VLOG_ERR("system command failure: cmd=%s",cmd);
     }
 
     netdev_change_seq_changed(netdev_);
