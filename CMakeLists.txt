@@ -24,7 +24,8 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99 -Werror")
 ### Define sources
 ###
 
-set (SOURCES ${SRC_DIR}/sim-plugins.c ${SRC_DIR}/netdev-sim.c ${SRC_DIR}/ofproto-sim-provider.c ${SRC_DIR}/netdev-vport-sim.c)
+set (SOURCES ${SRC_DIR}/sim-plugins.c ${SRC_DIR}/netdev-sim.c
+${SRC_DIR}/ofproto-sim-provider.c ${SRC_DIR}/netdev-vport-sim.c ${SRC_DIR}/sim-copp-plugin.c)
 
 ###
 ### Define and locate needed libraries and includes
@@ -42,7 +43,7 @@ include_directories(${CMAKE_SOURCE_DIR} ${OVSCOMMON_INCLUDE_DIRS} ${PROJECT_SOUR
 
 add_library (ovs_sim_plugin SHARED ${SOURCES})
 
-target_link_libraries (ovs_sim_plugin ${OVSCOMMON_LIBRARIES})
+target_link_libraries (ovs_sim_plugin ${OVSCOMMON_LIBRARIES} -lsupportability)
 
 ###
 ### Installation
