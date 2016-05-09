@@ -84,7 +84,7 @@ struct acl_hashmap
 /**************************************************************************//**
  * Structure holding a hashmap of port to ACL bindings
  *****************************************************************************/
-struct port2acl {
+struct acl_port_bindings {
      struct hmap_node list_node;  /**< Hash by list_id */
      struct uuid list_id;         /**< list_id of the ACL */
      ofp_port_t  port;            /**< Port on which ACL is applied */
@@ -259,7 +259,7 @@ dump_port_bindings(struct unixctl_conn * conn, int argc, const char *argv[],
                    void *aux OVS_UNUSED)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
-    struct port2acl *port, *next_port;
+    struct acl_port_bindings *port, *next_port;
     char *name;
     struct acl_hashmap *acl;
 
@@ -390,7 +390,7 @@ ops_cls_pd_apply(struct ops_cls_list            *list,
     struct acl_hashmap *acl;
     struct sim_provider_ofport *ofport, *next_port;
     ofp_port_t port;
-    struct port2acl *p2acl;
+    struct acl_port_bindings *acl_port_binding;
     struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
     bool port_found = false;
     int idx = 0;
@@ -428,19 +428,19 @@ ops_cls_pd_apply(struct ops_cls_list            *list,
     }
 
     /* Create the binding */
-    p2acl = xzalloc(sizeof(struct port2acl));
-    memcpy(&p2acl->list_id, &list->list_id, sizeof(struct uuid));
-    memcpy(&p2acl->interface_info, interface_info,
+    acl_port_binding = xzalloc(sizeof(struct acl_port_bindings));
+    memcpy(&acl_port_binding->list_id, &list->list_id, sizeof(struct uuid));
+    memcpy(&acl_port_binding->interface_info, interface_info,
            sizeof(struct ops_cls_interface_info));
-    p2acl->port = port;
-    p2acl->direction = direction;
+    acl_port_binding->port = port;
+    acl_port_binding->direction = direction;
     for (idx = 0; idx < MAX_ACE_ENTRIES; idx++) {
         /* set stats defaults */
-        p2acl->stats[idx].stats_enabled = 1;
-        p2acl->stats[idx].hitcounts = 0;
+        acl_port_binding->stats[idx].stats_enabled = 1;
+        acl_port_binding->stats[idx].hitcounts = 0;
     }
-    hmap_insert(&all_port_applications, &p2acl->list_node,
-                uuid_hash(&p2acl->list_id));
+    hmap_insert(&all_port_applications, &acl_port_binding->list_node,
+                uuid_hash(&acl_port_binding->list_id));
     return 0;
 }
 
@@ -456,7 +456,7 @@ ops_cls_pd_remove(const struct uuid                *list_id,
                   struct ops_cls_pd_status         *pd_status)
 {
     struct acl_hashmap *acl;
-    struct port2acl *p2acl;
+    struct acl_port_bindings *acl_port_binding;
     struct ofbundle *bundle;
     struct sim_provider_ofport *ofport, *next_port;
     struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
@@ -486,19 +486,19 @@ ops_cls_pd_remove(const struct uuid                *list_id,
         break;
     }
 
-    /* Search for the port2acl binding */
+    /* Search for the acl_port_bindings binding */
     if (port_found) {
-        HMAP_FOR_EACH_IN_BUCKET(p2acl, list_node, uuid_hash(list_id),
+        HMAP_FOR_EACH_IN_BUCKET(acl_port_binding, list_node, uuid_hash(list_id),
             &all_port_applications) {
-            if (p2acl->port == port) {
+            if (acl_port_binding->port == port) {
                 break;
             }
         }
-        if (p2acl) {
-            /* Remove the port2acl binding */
-            hmap_remove(&all_port_applications, &p2acl->list_node);
-            free(p2acl);
-            p2acl = NULL;
+        if (acl_port_binding) {
+            /* Remove the acl_port_bindings binding */
+            hmap_remove(&all_port_applications, &acl_port_binding->list_node);
+            free(acl_port_binding);
+            acl_port_binding = NULL;
         }
 
         /* Remove the list if all references are deleted */
@@ -567,7 +567,7 @@ ops_cls_pd_statistics_get(const struct uuid              *list_id,
 {
     int idx = 0;
     struct acl_hashmap *acl;
-    struct port2acl *p2acl;
+    struct acl_port_bindings *acl_port_binding;
     struct ofbundle *bundle;
     struct sim_provider_ofport *ofport, *next_port;
     struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
@@ -602,28 +602,28 @@ ops_cls_pd_statistics_get(const struct uuid              *list_id,
         break;
     }
 
-    /* Search for the port2acl binding */
+    /* Search for the acl_port_bindings binding */
     if (port_found) {
-        HMAP_FOR_EACH_IN_BUCKET(p2acl, list_node, uuid_hash(list_id),
+        HMAP_FOR_EACH_IN_BUCKET(acl_port_binding, list_node, uuid_hash(list_id),
             &all_port_applications) {
-            if (p2acl->port == port) {
+            if (acl_port_binding->port == port) {
                 break;
             }
         }
 
-        if (p2acl) {
+        if (acl_port_binding) {
             for (idx = 0; idx < num_entries; idx++) {
-                statistics[idx].stats_enabled = p2acl->stats[idx].stats_enabled;
+                statistics[idx].stats_enabled = acl_port_binding->stats[idx].stats_enabled;
                 if (statistics[idx].stats_enabled) {
                     /* update hitcount using random number between 0 to 9 */
-                    p2acl->stats[idx].hitcounts += random_uint64() % 10;
+                    acl_port_binding->stats[idx].hitcounts += random_uint64() % 10;
                     /* set result parameter */
-                    statistics[idx].hitcounts = p2acl->stats[idx].hitcounts;
+                    statistics[idx].hitcounts = acl_port_binding->stats[idx].hitcounts;
                 }
             }
             status->status_code = OPS_CLS_STATUS_SUCCESS;
         } else {
-            VLOG_DBG("port2acl binding not found\n");
+            VLOG_DBG("acl_port_bindings binding not found\n");
             return -1;
         }
     }
@@ -643,7 +643,7 @@ ops_cls_pd_statistics_clear(const struct uuid               *list_id,
 {
     int idx = 0;
     struct acl_hashmap *acl;
-    struct port2acl *p2acl;
+    struct acl_port_bindings *acl_port_binding;
     struct ofbundle *bundle;
     struct sim_provider_ofport *ofport, *next_port;
     struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
@@ -672,23 +672,23 @@ ops_cls_pd_statistics_clear(const struct uuid               *list_id,
         break;
     }
 
-    /* Search for the port2acl binding */
+    /* Search for the acl_port_bindings binding */
     if (port_found) {
-        HMAP_FOR_EACH_IN_BUCKET(p2acl, list_node, uuid_hash(list_id),
+        HMAP_FOR_EACH_IN_BUCKET(acl_port_binding, list_node, uuid_hash(list_id),
             &all_port_applications) {
-            if (p2acl->port == port) {
+            if (acl_port_binding->port == port) {
                 break;
             }
         }
 
-        if (p2acl) {
+        if (acl_port_binding) {
             for (idx = 0; idx < MAX_ACE_ENTRIES; idx++) {
                 /* clear hitcounts */
-                p2acl->stats[idx].hitcounts = 0;
+                acl_port_binding->stats[idx].hitcounts = 0;
             }
             status->status_code = OPS_CLS_STATUS_SUCCESS;
         } else {
-            VLOG_DBG("port2acl binding not found\n");
+            VLOG_DBG("acl_port_bindings binding not found\n");
             return -1;
         }
     }
