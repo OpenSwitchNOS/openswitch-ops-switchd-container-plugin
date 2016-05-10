@@ -18,6 +18,7 @@
 - [Design](#design)
     - [sFlow](#sFlow)
     - [COPP](#COPP)
+    - [Access Control Lists](#Access-Control-Lists)
 - [References](#references)
 
 ## Description
@@ -229,6 +230,12 @@ values are computed by summing the Rx stats for all of the ports found in
 /dev/proc/net, excluding bridge_normal, ovsnet-dev, and lo.  For hardware
 status, rate and burst values are fixed at 1,000,000,000 and local priority is
 fixed at zero.
+
+## Access Control Lists
+Access Control Lists (ACLs) are supported in the container as follows:
+ACLs can be created and entries added and removed  to the ACLs.  The ACLs can
+applied to and removed from interfaces within container.  The ACLs will not
+filter traffic within the container.
 
 ## References
 -------------
