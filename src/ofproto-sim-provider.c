@@ -1208,7 +1208,8 @@ mirror_set(struct ofproto *ofproto_, void *aux,
         /* Check if the buffer has enough space for the remaining command
          * buffer to be added */
         if ((MAX_CMD_LEN - n)
-                < (MIRROR_OUTPUT_PORT_CMD_MIN_LEN + strlen(out_bundle->name)
+                < (MIRROR_OUTPUT_PORT_CMD_MIN_LEN +
+                        NULL == out_bundle ? 0 : strlen(out_bundle->name)
                         + strlen(s->name))) {
             VLOG_ERR(
                     "Failed to create mirror '%s'. Command length would exceed buffer size %d",
@@ -1232,7 +1233,7 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                 " -- set mirror %s output-port=@out ", s->name);
             }
 
-            VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+            VLOG_DBG("%s:Constructed cmd (len %d):'%s'", __FUNCTION__, n, cmd_str);
 
             if (system(cmd_str) != 0) {
                 VLOG_ERR("Failed to create mirror %s. %s", s->name,
@@ -1260,7 +1261,7 @@ mirror_set(struct ofproto *ofproto_, void *aux,
                      "%s -- --id=@m get mirror %s -- remove bridge bridge_normal mirrors @m",
                      OVS_VSCTL, mirror->name);
 
-        VLOG_DBG("%s:Constructed cmd:'%s'", __FUNCTION__, cmd_str);
+        VLOG_DBG("%s:Constructed cmd (len %d):'%s'", __FUNCTION__, n, cmd_str);
 
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to delete mirror %s. %s", mirror->name,
