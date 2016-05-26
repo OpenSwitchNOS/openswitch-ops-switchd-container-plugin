@@ -76,8 +76,6 @@ init(const struct shash *iface_hints)
 static void
 enumerate_types(struct sset *types)
 {
-    struct sim_provider_node *ofproto;
-
     sset_add(types, "system");
     sset_add(types, "vrf");
 }
@@ -86,7 +84,6 @@ static int
 enumerate_names(const char *type, struct sset *names)
 {
     struct sim_provider_node *ofproto;
-    const char *port_type;
 
     sset_clear(names);
     HMAP_FOR_EACH(ofproto, all_sim_provider_node, &all_sim_provider_nodes) {
@@ -192,7 +189,6 @@ static int
 construct(struct ofproto *ofproto_)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
-    struct shash_node *node, *next;
     int error = 0;
     char cmd_str[MAX_CMD_LEN];
 
@@ -274,7 +270,7 @@ destruct(struct ofproto *ofproto_ OVS_UNUSED)
 
     if (ofproto->vrf == false) {
 
-        sprintf(ovs_delbr, "%s del-br %s", OVS_VSCTL, ofproto->up.name);
+        snprintf(ovs_delbr, sizeof(ovs_delbr), "%s del-br %s", OVS_VSCTL, ofproto->up.name);
         if (system(ovs_delbr) != 0) {
             VLOG_ERR("Failed to delete the bridge. cmd=%s, rc=%s",
                      ovs_delbr, strerror(errno));
@@ -528,7 +524,7 @@ sim_bridge_vlan_routing_update(struct sim_provider_node *ofproto, int vlan,
     }
 
     if (vlan_count == 0) {
-        n += snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " trunks=0");
+        snprintf(&cmd_str[n], (MAX_CMD_LEN - n), " trunks=0");
     }
 
     if (system(cmd_str) != 0) {
@@ -731,9 +727,8 @@ bundle_set(struct ofproto *ofproto_, void *aux,
            const struct ofproto_bundle_settings *s)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
-    const struct ofport *ofport = NULL;
     bool ok = false;
-    int ofp_port, i = 0, n = 0;
+    int i = 0, n = 0;
     char cmd_str[MAX_CMD_LEN];
     struct ofbundle *bundle;
     unsigned long *trunks = NULL;
@@ -769,6 +764,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     if (!bundle->name || strcmp(s->name, bundle->name)) {
         free(bundle->name);
         bundle->name = xstrdup(s->name);
+        ovs_assert(bundle->name);
         VLOG_DBG("bundle name is %s",bundle->name);
     }
 
@@ -993,19 +989,18 @@ static int
 mirror_set(struct ofproto *ofproto_, void *aux,
                       const struct ofproto_mirror_settings *s)
 {
-    struct mbundle *mbundle, *out;
+    struct mbundle *out;
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
     char cmd_str[MAX_CMD_LEN];
     int i = 0, n = 0, retval = 0;
     struct mirror *mirror;
-    mirror_mask_t mirror_bit;
     struct mbridge *mbridge;
     struct ofproto_mirror_bundle *srcs, *dsts;
     struct ofproto_mirror_bundle *outmb;
     struct ofbundle **bndlSrcs = NULL, **bndlDsts = NULL;
     struct hmapx srcs_map; /* Contains "struct ofbundle *"s. */
     struct hmapx dsts_map; /* Contains "struct ofbundle *"s. */
-    struct ofbundle *out_bundle;
+    struct ofbundle *out_bundle = NULL;
     bool mirrorModify = false;
 
     VLOG_DBG("%s:Entry()", __FUNCTION__);
@@ -1320,8 +1315,6 @@ void
 mirror_destroy(struct mbridge *mbridge, void *aux)
 {
     struct mirror *mirror = mirror_lookup(mbridge, aux);
-    mirror_mask_t mirror_bit;
-    struct mbundle *mbundle;
     int i;
 
     if (!mirror) {
@@ -1425,7 +1418,9 @@ port_query_by_name(const struct ofproto *ofproto_, const char *devname,
         ofport = shash_find_data(&ofproto->up.port_by_name, devname);
         ofproto_port->ofp_port = ofport ? ofport->ofp_port : OFPP_NONE;
         ofproto_port->name = xstrdup(devname);
+        ovs_assert(ofproto_port->name);
         ofproto_port->type = xstrdup(type);
+        ovs_assert(ofproto_port->type);
         VLOG_DBG("get_ofp_port name= %s type= %s flow# %d",
                  ofproto_port->name, ofproto_port->type,
                  ofproto_port->ofp_port);
@@ -1741,11 +1736,10 @@ sflow_iptable_del_all(void)
 static void
 sflow_ovs_delete(struct sim_provider_node *ofproto)
 {
-    int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
 
     /* remove the sflow config from bridge */
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
                         "%s list bridge %s | grep sflow | "
                         "awk -F ': ' '{print $2}' "
                         "| xargs %s remove bridge %s sflow",
@@ -1837,9 +1831,8 @@ sflow_cfg_set(struct ofproto_sflow_options *ofproto_cfg,
 static int
 sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
 {
-    int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -I INPUT -i %s -m statistic --mode random --probability %0.12f -j NFLOG "
             "--nflog-prefix SFLOW --nflog-group %d",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
@@ -1852,8 +1845,7 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
                   EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
-    cmd_len = 0;
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -I OUTPUT -o %s -m statistic --mode random --probability %0.12f -j NFLOG "
             "--nflog-prefix SFLOW --nflog-group %d",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
@@ -1866,8 +1858,7 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
                   EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
-    cmd_len = 0;
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -I FORWARD -i %s -m statistic --mode random --probability %0.12f -j NFLOG "
             "--nflog-prefix SFLOW --nflog-group %d",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
@@ -1880,8 +1871,7 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
                   EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
-    cmd_len = 0;
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -I FORWARD -o %s -m statistic --mode random --probability %0.12f -j NFLOG "
             "--nflog-prefix SFLOW --nflog-group %d",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
@@ -1900,9 +1890,8 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
 static int
 sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
 {
-    int cmd_len = 0;
     char cmd_str[MAX_CMD_LEN];
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -D INPUT -i %s -m statistic --mode random --probability %0.12f -j NFLOG "
             "--nflog-prefix SFLOW --nflog-group %d",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
@@ -1915,8 +1904,7 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
                   EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
-    cmd_len = 0;
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -D OUTPUT -o %s -m statistic --mode random --probability %0.12f -j NFLOG "
             "--nflog-prefix SFLOW --nflog-group %d",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
@@ -1929,8 +1917,7 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
                   EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
-    cmd_len = 0;
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -D FORWARD -i %s -m statistic --mode random --probability %0.12f -j NFLOG "
             "--nflog-prefix SFLOW --nflog-group %d",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
@@ -1943,8 +1930,7 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
                   EV_KV("error", "%s", strerror(errno)));
         return 1;
     }
-    cmd_len = 0;
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -D FORWARD -o %s -m statistic --mode random --probability %0.12f -j NFLOG "
             "--nflog-prefix SFLOW --nflog-group %d",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
@@ -2069,7 +2055,7 @@ sflow_ovs_configure(struct sim_provider_node *ofproto,
         }
         cmd_len--; /* to remove the last , */
     }
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
+    snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
                         " header=%d sampling=%d polling=%d "
                         "-- set bridge %s sflow=@sflow",
                         ofproto_cfg->header_len,
@@ -2141,7 +2127,7 @@ sflow_hostsflow_agent_configure(struct ofproto_sflow_options *ofproto_cfg)
                         "nflogGroup = %d\n", HOSTSFLOW_NFLOG_GRP);
     cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len,
                         "nflogProbability = %0.12f\n", 1/(double)ofproto_cfg->sampling_rate);
-    cmd_len += snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "}\n");
+    snprintf(cmd_str + cmd_len, MAX_CMD_LEN - cmd_len, "}\n");
     if ((fprintf(fp, "%s", cmd_str)) < 0) {
         VLOG_ERR("Failed to write to host sflow cfg file '%s'. rc='%s'",
                  HOSTSFLOW_CFG_FILENAME, strerror(errno));
