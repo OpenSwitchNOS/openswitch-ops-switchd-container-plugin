@@ -234,7 +234,6 @@ dump_acls(struct unixctl_conn *conn, int argc, const char *argv[],
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
     struct acl_hashmap *acl, *next_acl;
-    char *name;
     int arg_index = 1;
     VLOG_DBG("%s called\n", __func__);
 
@@ -260,7 +259,6 @@ dump_port_bindings(struct unixctl_conn * conn, int argc, const char *argv[],
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
     struct acl_port_bindings *port, *next_port;
-    char *name;
     struct acl_hashmap *acl;
 
     ds_put_format(&ds, "Port             ACL    \n");

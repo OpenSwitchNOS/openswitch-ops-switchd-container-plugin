@@ -206,19 +206,19 @@ netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
         VLOG_ERR("Invalid mac address %s", mac_addr);
     }
 
-    sprintf(cmd, "%s /sbin/ip link set dev %s down",
+    snprintf(cmd, sizeof(cmd), "%s /sbin/ip link set dev %s down",
             SWNS_EXEC, netdev->linux_intf_name);
     if (system(cmd) != 0) {
         VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
     }
 
-    sprintf(cmd, "%s /sbin/ip link set %s address %s",
+    snprintf(cmd, sizeof(cmd), "%s /sbin/ip link set %s address %s",
             SWNS_EXEC, netdev->up.name, netdev->hw_addr_str);
     if (system(cmd) != 0) {
         VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
     }
 
-    sprintf(cmd, "%s /sbin/ip link set dev %s up",
+    snprintf(cmd, sizeof(cmd), "%s /sbin/ip link set dev %s up",
             SWNS_EXEC, netdev->linux_intf_name);
     if (system(cmd) != 0) {
         VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
@@ -369,7 +369,11 @@ netdev_sim_get_iptable_stats(char *port, bool ingress, uint64_t *pkts,
              "| awk -F ' ' '{print $12}' | awk '{ sum+=$1} END {print sum}'",
              SWNS_EXEC, ingress ? 'i' : 'o', port);
     fp = popen(cmd_str, "r");
-    fgets(buffer, sizeof(buffer), fp);
+    if (fgets(buffer, sizeof(buffer), fp) == NULL) {
+        VLOG_ERR("sflow counters: cannot read iptable rules");
+        pclose(fp);
+        return;
+    }
     *pkts = atoll(buffer);
     pclose(fp);
 
@@ -377,7 +381,11 @@ netdev_sim_get_iptable_stats(char *port, bool ingress, uint64_t *pkts,
              "| awk -F ' ' '{print $13}' | awk '{ sum+=$1} END {print sum}'",
              SWNS_EXEC, ingress ? 'i' : 'o', port);
     fp = popen(cmd_str, "r");
-    fgets(buffer, sizeof(buffer), fp);
+    if (fgets(buffer, sizeof(buffer), fp) == NULL) {
+        VLOG_ERR("sflow counters: cannot read iptable rules");
+        pclose(fp);
+        return;
+    }
     *bytes = atoll(buffer);
     pclose(fp);
 
@@ -1136,7 +1144,12 @@ netdev_get_kernel_stats(const char *if_name, struct netdev_stats *stats)
     rtnl_msg.msg_iov = &io;
     rtnl_msg.msg_iovlen = 1;
 
-    sendmsg(sock, (struct msghdr *) &rtnl_msg, 0);
+    if (sendmsg(sock, (struct msghdr *) &rtnl_msg, 0) == -1) {
+        VLOG_ERR("Sendmsg failed during netlink \
+                request for statistics");
+        close(sock);
+        return -1;
+    }
 
     /* Prepare for reply from the kernel */
     bool multipart_msg_end = false;
