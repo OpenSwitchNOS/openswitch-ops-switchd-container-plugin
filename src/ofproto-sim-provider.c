@@ -1034,6 +1034,8 @@ mirror_set(struct ofproto *ofproto_, void *aux,
             mirror->out_vlan = -1;
             mirror->name = xzalloc(MAX_MIRROR_NAME_LEN + 1);
             strncpy(mirror->name, s->name, MAX_MIRROR_NAME_LEN);
+            hmapx_init(&mirror->srcs);
+            hmapx_init(&mirror->dsts);
         } else {
             VLOG_DBG("%s:Modifying existing mirror", __FUNCTION__);
             mirrorModify = true;
