@@ -1330,8 +1330,12 @@ mirror_destroy(struct mbridge *mbridge, void *aux)
     VLOG_DBG("%s:Deleting mirror %s", __FUNCTION__, mirror->name);
     i = mirror->idx;
 
-    hmapx_destroy(&mirror->srcs);
-    hmapx_destroy(&mirror->dsts);
+    if (!hmapx_is_empty(&mirror->srcs)) {
+        hmapx_destroy(&mirror->srcs);
+    }
+    if (!hmapx_is_empty(&mirror->dsts)) {
+        hmapx_destroy(&mirror->dsts);
+    }
 
     free(mirror->name);
     free(mirror->vlans);
