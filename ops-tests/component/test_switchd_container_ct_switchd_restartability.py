@@ -63,6 +63,7 @@ def test_switchd_container_ct_switchd_restartability(topology, step):
     step("Step 5- 'Starting' switchd service")
     ops1("systemctl start switchd", shell="bash")
 
+    sleep(2)
     step("Step 6- Verifying that port 3 got deleted from the 'ASIC' OVS "
          "database")
     port_name = ops1("/opt/openvswitch/bin/ovs-vsctl get port 3 vlan_mode",
@@ -84,6 +85,7 @@ def test_switchd_container_ct_switchd_restartability(topology, step):
     step("Step 10- 'Re-starting' switchd service")
     ops1("systemctl restart switchd", shell="bash")
 
+    sleep(2)
     step("Step 11- Verifying that port 2 got deleted from the 'ASIC' OVS "
          "database")
     port_name = ops1("/opt/openvswitch/bin/ovs-vsctl get port 2 vlan_mode",
