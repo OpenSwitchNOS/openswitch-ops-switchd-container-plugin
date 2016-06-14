@@ -37,7 +37,7 @@ ops1:if01 -- hs1:if01
 ops1:if02 -- hs2:if01
 """
 
-
+@mark.xfail(run=False)
 @mark.platform_incompatible(['ostl'])
 def test_switchd_container_ct_intervlan(topology, step):
     ops1 = topology.get("ops1")
