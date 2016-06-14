@@ -23,6 +23,7 @@
 #include "eventlog.h"
 #include "sim-copp-plugin.h"
 #include "ops-classifier-sim.h"
+#include "sim-stp.h"
 
 #define init libovs_sim_plugin_LTX_init
 #define run libovs_sim_plugin_LTX_run
@@ -86,6 +87,9 @@ init(void)
 
     /* Initialize classifier debug */
     classifier_sim_init();
+
+    /* register STP plugin */
+    register_stp_plugins();
 }
 
 void
