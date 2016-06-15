@@ -55,216 +55,237 @@ def test_switchd_container_ct_vlan_trunk(topology, step):
     s2p1 = ops2.ports["if01"]
     s2p2 = ops2.ports["if02"]
 
-    step("Add br0 on switch")
-    ops1("add-br br0", shell="vsctl")
-    ops_br_name = ops1("get br br0 name", shell="vsctl").strip()
-    out = ops1("/opt/openvswitch/bin/ovs-vsctl get br br0 datapath_type name",
-               shell="bash")
-    ovs_datapath_type, ovs_br_name = out.splitlines()
-    assert (
-        ovs_datapath_type == 'netdev' and
-        ops_br_name == ovs_br_name
-    )
-
     step("Add VLAN100 to global VLAN table on Switch")
-    ops1("add-vlan br0 100 admin=up", shell="vsctl")
-    out = ops1("get vlan VLAN100 admin id name", shell="vsctl")
-    ops_admin_state, ops_vlan_id, ops_vlan_name = out.splitlines()
-    assert (
-        ops_admin_state == 'up' and
-        ops_vlan_id == '100'and
-        ops_vlan_name == '"VLAN100"'
-    )
+    with ops1.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
+    outbuf = ops1.libs.vtysh.show_running_config()
+    # lines = outbuf.splitlines()
+    vid_admin_up = outbuf['vlan']['100']['admin']
+    '''
+    for idx in range(len(lines)):
+        if "vlan 100" in lines[idx]:
+            vid_added = "true"
+            if "no shutdown" in lines[idx + 1]:
+                vid_admin_up = "true"
+    '''
+    # assert( vid_added == "true" , "VLAN 100 did not get added")
+    assert( vid_admin_up == "true" , "VLAN 100 admin state is not up")
+
 
     step("Add port 1 with tag 100 and port  2 with trunk 100 on Switch ")
-    ops1("add-port br0 1 vlan_mode=access tag=100", shell="vsctl")
-    ops1("set interface {int} user_config:admin=up".format(int=s1p1),
-         shell="vsctl")
-    ops1("add-port br0 2 vlan_mode=trunk trunks=100", shell="vsctl")
-    ops1("set interface {int} user_config:admin=up".format(int=s1p2),
-         shell="vsctl")
-    sleep(1)
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_access("100")
+
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_allowed("100")
 
     step("Verify whether same configuration gets set on the ASIC"
          " simulating InternalOVS")
-    out = ops1("get port {int} name tag vlan_mode".format(int=s1p1),
-               shell="vsctl")
-    ops_port_name, ops_tag, ops_vlan_mode = out.splitlines()
-    out = ops1("/opt/openvswitch/bin/ovs-vsctl get port {int} name tag "
-               "vlan_mode".format(int=s1p1),
-               shell="bash")
-    ovs_port_name, ovs_tag, ovs_vlan_mode = out.splitlines()
-    assert (
-        ops_port_name == ovs_port_name and
-        ops_tag == ovs_tag and ops_vlan_mode == ovs_vlan_mode
-    )
 
-    out = ops1("get port {int} name trunks vlan_mode".format(int=s1p2),
-               shell="vsctl")
-    ops_port_name, ops_trunks, ops_vlan_mode = out.splitlines()
-    out = ops1("/opt/openvswitch/bin/ovs-vsctl get port {int} name "
-               "trunks vlan_mode".format(int=s1p2), shell="bash")
-    ovs_port_name, ovs_trunks, ovs_vlan_mode = out.splitlines()
-    assert (
-        ops_port_name == ovs_port_name and
-        ops_tag == ovs_tag and ops_vlan_mode == ovs_vlan_mode
-    )
-
-    ops_admin_state, ops_link_state, ops_user_config, ops_mac_addr = (
-        ops1("get interface {int} admin_state link_state user_config:admin "
-             "hw_intf_info:mac_addr".format(int=s1p1),
-             shell="vsctl").splitlines()
-    )
-    out = ops1("/opt/openvswitch/bin/ovs-vsctl get interface {int} "
-               "admin_state mac_in_use".format(int=s1p1), shell="bash")
-    ovs_admin_state, ovs_mac_addr = out.splitlines()
-    assert (
-        ops_admin_state == ovs_admin_state and ops_link_state == 'up'and
-        ops_user_config == 'up' and ops_mac_addr == ovs_mac_addr
-    )
-
-    ops1("del-vlan br0 100", shell="vsctl")
-    ops1("del-port br0 1", shell="vsctl")
-    ops1("del-port br0 2", shell="vsctl")
-    ops1("del-br br0", shell="vsctl")
+    with ops1.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(100)
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.routing()
+        ctx.shutdown()
 
     step("Add VLAN 100 to global VLAN table on Switch1 and Switch2")
-    ops1("add-br br0", shell="vsctl")
-    ops2("add-br br0", shell="vsctl")
-    ops1("add-vlan br0 100 admin=up", shell="vsctl")
-    ops2("add-vlan br0 100 admin=up", shell="vsctl")
+    with ops1.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
+    with ops2.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
 
     step("Add port 1 with tag 100 on Switch1 and Switch2 (access mode)")
-    ops1("add-port br0 {int} vlan_mode=access tag=100".format(int=s1p1),
-         shell="vsctl")
-    ops1("set interface {int} user_config:admin=up".format(int=s1p1),
-         shell="vsctl")
-    ops2("add-port br0 {int} vlan_mode=access tag=100".format(int=s2p1),
-         shell="vsctl")
-    ops2("set interface {int} user_config:admin=up".format(int=s2p1),
-         shell="vsctl")
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_access("100")
+    with ops2.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_access("100")
 
     step("Add port 2 with trunk 100 on Switch1 and Switch2 (trunk mode)")
-    ops1("add-port br0 {int} vlan_mode=trunk trunks=100".format(int=s1p2),
-         shell="vsctl")
-    ops1("set interface {int} user_config:admin=up".format(int=s1p2),
-         shell="vsctl")
-    ops2("add-port br0 {int} vlan_mode=trunk trunks=100".format(int=s2p2),
-         shell="vsctl")
-    ops2("set interface {int} user_config:admin=up".format(int=s2p2),
-         shell="vsctl")
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_allowed("100")
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_allowed("100")
+
+    ops1.libs.vtysh.show_running_config()
+    ops2.libs.vtysh.show_running_config()
 
     step("Test Ping - should work")
+    sleep(5)
     hs1.libs.ip.interface('if01', addr="10.0.0.1/8", up=True)
     hs2.libs.ip.interface('if01', addr="10.0.0.2/8", up=True)
 
     ping4 = hs1.libs.ping.ping(5, "10.0.0.2")
     assert ping4["received"] >= 3
 
-    ops1("del-vlan br0 100", shell="vsctl")
-    ops2("del-vlan br0 100", shell="vsctl")
-    ops1("del-port 1", shell="vsctl")
-    ops2("del-port 1", shell="vsctl")
-    ops1("del-port 2", shell="vsctl")
-    ops2("del-port 2", shell="vsctl")
-    ops1("del-br br0", shell="vsctl")
-    ops2("del-br br0", shell="vsctl")
+    step("Remove VLAN 100 to global VLAN table of Switch1 and Switch2")
+    with ops1.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(100)
+    with ops2.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(100)
 
-    step("Dont add VLAN 100 to global VLAN table of Switch1 and Switch2")
-    ops1("add-br br0", shell="vsctl")
-    ops2("add-br br0", shell="vsctl")
+    step("Add port 2 with trunk 200 on Switch1 and Switch2 (trunk mode)")
+    with ops1.libs.vtysh.ConfigVlan("200") as ctx:
+        ctx.no_shutdown()
+    with ops2.libs.vtysh.ConfigVlan("200") as ctx:
+        ctx.no_shutdown()
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_native("200")
+        ctx.vlan_trunk_allowed("200")
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_native("200")
+        ctx.vlan_trunk_allowed("200")
 
-    step("Add port 1 with tag 100 on Switch1 and Switch2 (access mode)")
-    ops1("add-port br0 {int} vlan_mode=access tag=100".format(int=s1p1),
-         shell="vsctl")
-    ops1("set interface {int} user_config:admin=up".format(int=s1p1),
-         shell="vsctl")
-    ops2("add-port br0 {int} vlan_mode=access tag=100".format(int=s2p1),
-         shell="vsctl")
-    ops2("set interface {int} user_config:admin=up".format(int=s2p1),
-         shell="vsctl")
-
-    step("Add port 2 with trunk 100 on Switch1 and Switch2 (trunk mode)")
-    ops1("add-port br0 {int} vlan_mode=trunk trunks=100".format(int=s1p2),
-         shell="vsctl")
-    ops1("set interface {int} user_config:admin=up".format(int=s1p2),
-         shell="vsctl")
-    ops2("add-port br0 {int} vlan_mode=trunk trunks=100".format(int=s2p2),
-         shell="vsctl")
-    ops2("set interface {int} user_config:admin=up".format(int=s2p2),
-         shell="vsctl")
+    ops1.libs.vtysh.show_running_config()
+    ops2.libs.vtysh.show_running_config()
 
     step("Test Ping - should not work")
+    sleep(5)
 
     ping4 = hs1.libs.ping.ping(5, "10.0.0.2")
     assert ping4["received"] == 0
 
     step("Add VLAN 100 to global VLAN table of Switch1 and Switch2, "
          "ports should get reconfigured")
-    ops1("add-vlan br0 100 admin=up", shell="vsctl")
-    ops2("add-vlan br0 100 admin=up", shell="vsctl")
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops1.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
+    with ops2.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_allowed("100")
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_allowed("100")
+
+    ops1.libs.vtysh.show_running_config()
+    ops2.libs.vtysh.show_running_config()
 
     step("Test Ping - should work")
+    sleep(5)
     ping4 = hs1.libs.ping.ping(5, "10.0.0.2")
     assert ping4["received"] >= 3
 
-    ops1("del-vlan br0 100", shell="vsctl")
-    ops2("del-vlan br0 100", shell="vsctl")
-    ops1("del-port 1", shell="vsctl")
-    ops2("del-port 1", shell="vsctl")
-    ops1("del-port 2", shell="vsctl")
-    ops2("del-port 2", shell="vsctl")
-    ops1("del-br br0", shell="vsctl")
-    ops2("del-br br0", shell="vsctl")
+    with ops1.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(200)
+    with ops2.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(200)
+    with ops1.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(100)
+    with ops2.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(100)
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops2.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.routing()
+        ctx.shutdown()
 
-    step("Add VLAN 100 to global VLAN table in Switch1 and Switch2")
-    ops1("add-br br0", shell="vsctl")
-    ops2("add-br br0", shell="vsctl")
-    ops1("add-vlan br0 100 admin=up", shell="vsctl")
-    ops2("add-vlan br0 100 admin=up", shell="vsctl")
+    step("Add VLAN 100 and 200 to global VLAN table in Switch1 and Switch2")
+    with ops1.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
+    with ops2.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
+    with ops2.libs.vtysh.ConfigVlan("200") as ctx:
+        ctx.no_shutdown()
 
     step("Add port 1 with tag 100 on Switch1 and Switch2 (access mode)")
-    ops1("add-port br0 {int} vlan_mode=access tag=100".format(int=s1p1),
-         shell="vsctl")
-    ops1("set interface {int} user_config:admin=up".format(int=s1p1),
-         shell="vsctl")
-    ops2("add-port br0 {int} vlan_mode=access tag=100".format(int=s2p1),
-         shell="vsctl")
-    ops2("set interface {int} user_config:admin=up".format(int=s2p1),
-         shell="vsctl")
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_access("100")
+    with ops2.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_access("100")
 
-    step("Add port 2 with trunk 100 on Switch1 and Switch2 (trunk mode)")
-    ops1("add-port br0 {int} vlan_mode=trunk trunks=100".format(int=s1p2),
-         shell="vsctl")
-    ops1("set interface {int} user_config:admin=up".format(int=s1p2),
-         shell="vsctl")
-    ops2("add-port br0 {int} vlan_mode=trunk trunks=200".format(int=s2p2),
-         shell="vsctl")
-    ops2("set interface {int} user_config:admin=up".format(int=s2p2),
-         shell="vsctl")
+    step("Add port 2 with trunk 100 on Switch1 and with trunk 200 on Switch2 (trunk mode)")
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_native("100")
+        ctx.vlan_trunk_allowed("100")
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_native("200")
+        ctx.vlan_trunk_allowed("200")
+
+    ops1.libs.vtysh.show_running_config()
+    ops2.libs.vtysh.show_running_config()
 
     step("Test Ping - should not work")
+    sleep(5)
 
     ping4 = hs1.libs.ping.ping(5, "10.0.0.2")
     assert ping4["received"] == 0
 
-    step("Delete port 2 and add port 2 with trunk 100 on Switch1 and Switch2 "
+    step("Delete port 2 and add port 2 with trunk 100 on Switch2 "
          "(trunk mode)")
-    ops2("del-port {int}".format(int=s2p2), shell="vsctl")
-    ops2("add-port br0 {int} vlan_mode=trunk trunks=100".format(int=s2p2),
-         shell="vsctl")
-    ops2("set interface {int} user_config:admin=up".format(int=s2p2),
-         shell="vsctl")
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_native("100")
+        ctx.vlan_trunk_allowed("100")
+
+    ops1.libs.vtysh.show_running_config()
+    ops2.libs.vtysh.show_running_config()
 
     step("Test Ping - should work")
+    sleep(5)
     ping4 = hs1.libs.ping.ping(5, "10.0.0.2")
     assert ping4["received"] >= 3
 
-    ops1("del-vlan br0 100", shell="vsctl")
-    ops2("del-vlan br0 100", shell="vsctl")
-    ops1("del-port 1", shell="vsctl")
-    ops2("del-port 1", shell="vsctl")
-    ops1("del-port 2", shell="vsctl")
-    ops2("del-port 2", shell="vsctl")
-    ops1("del-br br0", shell="vsctl")
-    ops2("del-br br0", shell="vsctl")
+    with ops1.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(100)
+    with ops2.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(100)
+    with ops2.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(200)
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops2.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.routing()
+        ctx.shutdown()
+    with ops2.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.routing()
+        ctx.shutdown()
