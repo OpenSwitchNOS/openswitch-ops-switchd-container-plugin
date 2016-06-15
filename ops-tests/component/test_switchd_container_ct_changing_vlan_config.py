@@ -40,113 +40,110 @@ def test_switchd_container_ct_changing_vlan_config(topology, step):
 
     step("Adding port 1 with a DEFAULT VLAN configuration and "
          "verify the trunking capability of the port ")
-    ops1("add-port bridge_normal 1", shell="vsctl")
-    ops1("set interface 1 user_config:admin=up", shell="vsctl")
-    port_name = ops1("/opt/openvswitch/bin/ovs-vsctl get port 1 vlan_mode",
-                     shell="bash")
-    assert "trunk" in port_name, "Port 1 did not get added in " \
-        "'ASIC' OVS when a default VLAN is present"
+
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+
+    outbuf = ops1.libs.vtysh.show_running_config()
+    int_admin_up = outbuf['interface']['1']['admin']
+    assert( int_admin_up == "up" , "Interface 1 admin state is not up")
 
     step("Enabling VLAN100 in the global VLAN table")
-    ops1("add-vlan bridge_normal 100 admin=up", shell="vsctl")
-    sleep(2)
-    port_name = ops1("/opt/openvswitch/bin/ovs-vsctl get port 1 vlan_mode",
-                     shell="bash")
-    assert "trunk" in port_name, "Port 1 did not get added in " \
-        "'ASIC' OVS even after global VLAN100 was enabled"
+    with ops1.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
+    sleep(1)
 
-    step("Port 1 got added in trunk mode in 'ASIC' OVS as expected")
-    port_trunk = ops1("/opt/openvswitch/bin/ovs-vsctl get port 1 trunks",
-                      shell="bash")
-    assert "[1, 100]" in port_trunk
+    outbuf = ops1.libs.vtysh.show_running_config()
+    vid_admin_up = outbuf['vlan']['100']['admin']
+    assert( vid_admin_up == "up" , "VLAN 100 admin state is not up")
 
     step("Now deleting port 1")
-    ops1("del-port bridge_normal 1", shell="vsctl")
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.routing()
+
+    outbuf = ops1.libs.vtysh.show_running_config()
+    int1_admin_up = outbuf['interface']['1']['admin']
+    assert( int1_admin_up != "up" , "Interface 1 admin state is up")
 
     step("Specifying just the tag and vlan_mode field while adding port 1 "
          "considering the presence of DEFAULT_VLAN_1")
-    ops1("add-port bridge_normal 1 vlan_mode=access tag=100", shell="vsctl")
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.no_routing()
+        ctx.vlan_access("100")
     sleep(1)
 
-    port_mode, port_tag = ops1("/opt/openvswitch/bin/ovs-vsctl get port 1 "
-                               "vlan_mode tag", shell="bash").splitlines()
-    assert "access" in port_mode and "100" in port_tag
+    outbuf = ops1.libs.vtysh.show_running_config()
+    id = {}
+    for idx in outbuf['interface']['1']['vlan']:
+        if idx['vlanid'] == "100":
+            id = idx
+            break
+
+    int1_mode = id['mode']
+    assert int1_mode == "access"
 
     step("Changing vlan mode to 'trunk' using ovs-vsctl set feature")
-    ops1("set port 1 vlan_mode=trunk trunks=100", shell="vsctl")
-    port_mode, port_trunk = ops1("get port 1 vlan_mode trunks",
-                                 shell="vsctl").splitlines()
-    assert "trunk" in port_mode and "100" in port_trunk
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.vlan_trunk_allowed("100")
+    outbuf = ops1.libs.vtysh.show_running_config()
+    id = {}
+    for idx in outbuf['interface']['1']['vlan']:
+        if idx['vlanid'] == "100":
+            id = idx
+            break
+
+    int1_mode = id['mode']
+    assert int1_mode == "trunk"
+
 
     step("Changing vlan mode to 'native-tagged' using ovs-vsctl set "
          "feature")
-    ops1("set port 1 vlan_mode=native-tagged tag=100 trunks=100",
-         shell="vsctl")
-    port_mode, port_trunk, port_tag = \
-        ops1("get port 1 vlan_mode trunks tag", shell="vsctl").splitlines()
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.vlan_trunk_native("100")
+        ctx.vlan_trunk_native_tag()
+    port_buf = ops1("show running-config interface 1", shell="vtysh")
+
     assert (
-        "native-tagged" in port_mode and "100" in port_trunk and
-        "100" in port_tag
-    )
+        "native tag" in port_buf and "native 100" in port_buf)
 
-    step("Changing vlan mode to 'native-untagged' using ovs-vsctl "
-         "set feature")
-    ops1("set port 1 vlan_mode=native-untagged tag=100 trunks=100",
-         shell="vsctl")
-    port_mode, port_trunk, port_tag = ops1(
-        "/opt/openvswitch/bin/ovs-vsctl get port 1 vlan_mode trunks tag",
-        shell="bash").splitlines()
+    step("Changing vlan mode to 'native untagged' using vtysh lib ")
+    with ops1.libs.vtysh.ConfigInterface("1") as ctx:
+        ctx.no_vlan_trunk_native_tag()
+
+    port_buf = ops1("show running-config interface 1", shell="vtysh")
     assert (
-        "native-untagged" in port_mode and "100" in port_trunk and
-        "100" in port_tag
-    )
-
-    step("Setting trunks=200 and vlan_mode=trunk for port 1 which "
-         "is not enabled in the global VLAN table")
-    port_name = ops1("/opt/openvswitch/bin/ovs-vsctl get port 1 vlan_mode",
-                     shell="bash")
-    assert "trunk" not in port_name
-
-    step("Setting tag=200 and vlan_mode=access for port 1 which "
-         "is not enabled in the global VLAN table")
-    ops1("set port 1 vlan_mode=access tag=200", shell="vsctl")
-    port_name = ops1("/opt/openvswitch/bin/ovs-vsctl get port 1 vlan_mode",
-                     shell="bash")
-    assert "access" not in port_name
+        "native tag" not in port_buf and "trunk allowed 100" in port_buf)
 
     step("Deleting VLAN100 from the global VLAN table")
-    ops1("del-vlan bridge_normal 100", shell="vsctl")
-
-    step("Adding port 2 without an VLAN configuration specified")
-    ops1("add-port bridge_normal 2", shell="vsctl")
-    port_name = ops1("/opt/openvswitch/bin/ovs-vsctl get port 2 vlan_mode",
-                     shell="bash")
-    assert "trunk" in port_name
+    with ops1.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(100)
 
     step("Adding VLAN100 and VLAN200 in the global VLAN table")
-    ops1("add-vlan bridge_normal 100 admin=up", shell="vsctl")
-    sleep(1)
-    ops1("add-vlan bridge_normal 200 admin=up", shell="vsctl")
+    with ops1.libs.vtysh.ConfigVlan("100") as ctx:
+        ctx.no_shutdown()
+
     sleep(1)
 
-    port_mode_1, port_tag = ops1("/opt/openvswitch/bin/ovs-vsctl get port 1 "
-                                 "vlan_mode tag", shell="bash").splitlines()
-    port_mode_2, port_trunk = ops1("/opt/openvswitch/bin/ovs-vsctl get port 2"
-                                   " vlan_mode trunks",
-                                   shell="bash").splitlines()
-    assert (
-        "access" in port_mode_1 and "200" in port_tag and
-        "trunk" in port_mode_2 and "1, 100, 200" in port_trunk
-    )
+    with ops1.libs.vtysh.ConfigVlan("200") as ctx:
+        ctx.no_shutdown()
+
+    sleep(1)
+
+    step("Adding port 2 without an VLAN configuration specified")
+    with ops1.libs.vtysh.ConfigInterface("2") as ctx:
+        ctx.no_routing()
+        ctx.no_shutdown()
+        ctx.vlan_trunk_native("200")
+
+    port_2_buf = ops1("show running-config interface 2", shell="vtysh")
+    assert "trunk native 200" in port_2_buf
 
     step("Deleting VLAN200 from the global VLAN table")
-    ops1("del-vlan bridge_normal 200", shell="vsctl")
-    port_name_1 = ops1("/opt/openvswitch/bin/ovs-vsctl get port 1 vlan_mode",
-                       shell="bash")
-    port_mode_2, port_trunk = ops1("/opt/openvswitch/bin/ovs-vsctl get port 2 "
-                                   "vlan_mode trunks",
-                                    shell="bash").splitlines()
+    with ops1.libs.vtysh.Configure() as ctx:
+        ctx.no_vlan(200)
+    port_mode_1 = ops1("show running-config interface 1", shell="vtysh")
+    port_mode_2 = ops1("show running-config interface 2", shell="vtysh")
     assert (
-        "access" not in port_name_1 and "100" in port_trunk and
-        "trunk" in port_mode_2 and "200" not in port_trunk
+        "access 100" not in port_mode_1 and "trunk native 200" not in port_mode_2
     )
