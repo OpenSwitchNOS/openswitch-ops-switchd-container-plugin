@@ -31,6 +31,8 @@ TOPOLOGY = """
 # Nodes
 [type=openswitch name="OpenSwitch 1"] ops1
 [type=openswitch name="OpenSwitch 2"] ops2
+[type=host name="Host 1"] hs1
+[type=host name="Host 2"] hs2
 
 # Links
 ops1:if01 -- hs1:if01
