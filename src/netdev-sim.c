@@ -81,7 +81,8 @@ struct netdev_sim {
     uint64_t sflow_prev_egress_bytes;
 
     /* used for maintaining general L3 stats */
-    bool l3_stats_enabled;
+    struct ovs_mutex l3_stats_mutex;
+    bool   l3_stats_enabled;
 };
 
 struct kernel_l3_stats {
@@ -149,6 +150,7 @@ netdev_sim_construct(struct netdev *netdev_)
     netdev->sflow_prev_egress_pkts = 0;
     netdev->sflow_prev_egress_bytes = 0;
     netdev->l3_stats_enabled = false;
+    ovs_mutex_init(&netdev->l3_stats_mutex);
 
     ovs_mutex_unlock(&netdev->mutex);
 
@@ -1029,12 +1031,15 @@ netdev_sim_l3stats_delete_rule(const char *if_name, const char *xtables_cmd,
     return rc;
 }
 
-void
-netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
+static void
+*netdev_sim_xtables_rule_create_(void *netdev)
 {
-    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    struct netdev_sim *dev = netdev_sim_cast((struct netdev*)netdev);
+
+    ovs_mutex_lock(&dev->l3_stats_mutex);
+
     if (dev->l3_stats_enabled) {
-        return;
+        return NULL;
     }
 
     netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
@@ -1052,14 +1057,33 @@ netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
     netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
 
     dev->l3_stats_enabled = true;
+
+    ovs_mutex_unlock(&dev->l3_stats_mutex);
 }
 
+
 void
-netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
+netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
+    pthread_t iptables_install_thread;
+    pthread_attr_t attr;
+
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_create(&iptables_install_thread,
+                   &attr, netdev_sim_xtables_rule_create_, netdev);
+}
+
+static void
+*netdev_sim_xtables_rule_delete_(void *netdev)
+{
+    struct netdev_sim *dev = netdev_sim_cast((struct netdev*)netdev);
+
+    ovs_mutex_lock(&dev->l3_stats_mutex);
+
     if (!dev->l3_stats_enabled) {
-        return;
+        return NULL;
     }
 
     netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
@@ -1077,6 +1101,21 @@ netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
     netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
 
     dev->l3_stats_enabled = false;
+
+    ovs_mutex_unlock(&dev->l3_stats_mutex);
+}
+
+void
+netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
+{
+    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    pthread_t iptables_uninstall_thread;
+    pthread_attr_t attr;
+
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_create(&iptables_uninstall_thread,
+                   &attr, netdev_sim_xtables_rule_delete_, netdev);
 }
 
 static void
