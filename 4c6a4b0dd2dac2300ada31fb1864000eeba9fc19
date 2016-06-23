@@ -1,0 +1,8 @@
+Code-Review+2: Vivek Ramamoorthy <vivek.ramamoorthy@hpe.com>
+Verified+2: Vivek Ramamoorthy <vivek.ramamoorthy@hpe.com>
+Workflow+1: Vivek Ramamoorthy <vivek.ramamoorthy@hpe.com>
+Submitted-by: Vivek Ramamoorthy <vivek.ramamoorthy@hpe.com>
+Submitted-at: Thu, 23 Jun 2016 06:28:55 +0000
+Reviewed-on: https://review.openswitch.net/11233
+Project: openswitch/ops-switchd-container-plugin
+Branch: refs/heads/feature/citlinkissue
