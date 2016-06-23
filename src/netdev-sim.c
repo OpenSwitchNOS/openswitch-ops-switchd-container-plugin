@@ -31,6 +31,7 @@
 #include <linux/rtnetlink.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
+#include <net/if_arp.h>
 #include <net/if.h>
 
 #include "openswitch-idl.h"
@@ -183,6 +184,45 @@ netdev_sim_run(void)
      * link state on the go. So ignoring this function. */
 }
 
+/* Use SIOCSIFHWADDR to change MAC address of intf.
+ * Linux tun tap interfaces does not seem to need
+ * an admin down before MAC change. */
+static int
+netdev_sim_set_macaddr(char *intf, char *macaddr)
+{
+    struct ifreq ifr;
+    int sock;
+
+    snprintf(ifr.ifr_name, IFNAMSIZ, "%s", intf);
+    ifr.ifr_hwaddr.sa_family = ARPHRD_ETHER;
+    if (sscanf(macaddr, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+               &ifr.ifr_hwaddr.sa_data[0],
+               &ifr.ifr_hwaddr.sa_data[1],
+               &ifr.ifr_hwaddr.sa_data[2],
+               &ifr.ifr_hwaddr.sa_data[3],
+               &ifr.ifr_hwaddr.sa_data[4],
+               &ifr.ifr_hwaddr.sa_data[5]) != ETH_ADDR_LEN) {
+        VLOG_ERR("netdev_set_macaddr (%s) sscanf failed for (%s)\n",
+                  intf, macaddr);
+        return -1;
+    }
+    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        VLOG_ERR("netdev_set_macaddr (%s) MAC (%s) socket failed '%s'\n",
+                  intf, macaddr, strerror(errno));
+        return -1;
+    }
+
+    if (ioctl(sock, SIOCSIFHWADDR, &ifr) < 0) {
+        VLOG_ERR("netdev_set_macaddr (%s) MAC (%s) ioctl failed '%s'\n",
+                  intf, macaddr, strerror(errno));
+        close(sock);
+        return -1;
+    }
+
+    close(sock);
+    return 0;
+}
+
 static int
 netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
 {
@@ -206,24 +246,7 @@ netdev_sim_set_hw_intf_info(struct netdev *netdev_, const struct smap *args)
         VLOG_ERR("Invalid mac address %s", mac_addr);
     }
 
-    snprintf(cmd, sizeof(cmd), "%s /sbin/ip link set dev %s down",
-            SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
-    }
-
-    snprintf(cmd, sizeof(cmd), "%s /sbin/ip link set %s address %s",
-            SWNS_EXEC, netdev->up.name, netdev->hw_addr_str);
-    if (system(cmd) != 0) {
-        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
-    }
-
-    snprintf(cmd, sizeof(cmd), "%s /sbin/ip link set dev %s up",
-            SWNS_EXEC, netdev->linux_intf_name);
-    if (system(cmd) != 0) {
-        VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd);
-    }
-
+    netdev_sim_set_macaddr(netdev->up.name, netdev->hw_addr_str);
     ovs_mutex_unlock(&netdev->mutex);
 
     return 0;
