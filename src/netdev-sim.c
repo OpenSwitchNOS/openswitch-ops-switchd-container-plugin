@@ -996,13 +996,10 @@ netdev_sim_l3stats_delete_rule(const char *if_name, const char *xtables_cmd,
     return rc;
 }
 
-void
-netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
+static void
+*netdev_sim_xtables_rule_create_(void *netdev)
 {
-    struct netdev_sim *dev = netdev_sim_cast(netdev);
-    if (dev->l3_stats_enabled) {
-        return;
-    }
+    struct netdev_sim *dev = netdev_sim_cast((struct netdev*)netdev);
 
     netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
     netdev_sim_l3stats_add_rule(dev->linux_intf_name, "iptables", "INPUT", "multicast");
@@ -1018,16 +1015,27 @@ netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
     netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "unicast");
     netdev_sim_l3stats_add_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
 
+    ovs_mutex_lock(&dev->mutex);
     dev->l3_stats_enabled = true;
+    ovs_mutex_unlock(&dev->mutex);
 }
 
 void
-netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
+netdev_sim_l3stats_xtables_rules_create(struct netdev *netdev)
 {
     struct netdev_sim *dev = netdev_sim_cast(netdev);
-    if (!dev->l3_stats_enabled) {
+    pthread_t rules_create_thread;
+    if (dev->l3_stats_enabled) {
         return;
     }
+
+    pthread_create(&rules_create_thread, NULL, netdev_sim_xtables_rule_create_, netdev);
+}
+
+static void
+*netdev_sim_xtables_rule_delete_(void *netdev)
+{
+    struct netdev_sim *dev = netdev_sim_cast((struct netdev*)netdev);
 
     netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "INPUT", "unicast");
     netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "iptables", "INPUT", "multicast");
@@ -1043,7 +1051,22 @@ netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
     netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "unicast");
     netdev_sim_l3stats_delete_rule(dev->linux_intf_name, "ip6tables", "FORWARD", "multicast");
 
+    ovs_mutex_lock(&dev->mutex);
     dev->l3_stats_enabled = false;
+    ovs_mutex_unlock(&dev->mutex);
+}
+
+void
+netdev_sim_l3stats_xtables_rules_delete(struct netdev *netdev)
+{
+    struct netdev_sim *dev = netdev_sim_cast(netdev);
+    pthread_t rules_delete_thread;
+
+    if (!dev->l3_stats_enabled) {
+        return;
+    }
+
+    pthread_create(&rules_delete_thread, NULL, netdev_sim_xtables_rule_delete_, netdev);
 }
 
 static void
