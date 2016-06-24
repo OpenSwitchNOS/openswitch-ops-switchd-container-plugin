@@ -128,6 +128,7 @@ def test_switchd_container_ct_intervlan(topology, step):
 
     with ops1.libs.vtysh.ConfigInterfaceVlan("100") as ctx:
         ctx.no_shutdown()
+
     sleep(5)
 
     admin_state, link_state = ops1("get interface vlan100 "
