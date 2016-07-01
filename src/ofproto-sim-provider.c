@@ -388,14 +388,14 @@ enable_port_in_iptables(const char *port_name)
 {
     char cmd[MAX_CMD_LEN];
 
-    snprintf(cmd, MAX_CMD_LEN, "%s iptables -D INPUT -i %s -j DROP",
+    snprintf(cmd, MAX_CMD_LEN, "%s iptables -D INPUT -i %s -j DROP -w",
              SWNS_EXEC, port_name);
     if (system(cmd) != 0) {
         VLOG_ERR("Failed to delete DROP rule. cmd=%s rc=%s", cmd,
                  strerror(errno));
     }
 
-    snprintf(cmd, MAX_CMD_LEN, "%s iptables -D FORWARD -i %s -j DROP",
+    snprintf(cmd, MAX_CMD_LEN, "%s iptables -D FORWARD -i %s -j DROP -w",
              SWNS_EXEC, port_name);
     if (system(cmd) != 0) {
         VLOG_ERR("Failed to delete DROP rule. cmd=%s rc=%s", cmd,
@@ -410,19 +410,19 @@ disable_port_in_iptables(const char *port_name)
     char cmd[MAX_CMD_LEN];
 
     /* Do not add drop rules if the "Check" command returns success. */
-    snprintf(cmd, MAX_CMD_LEN, "%s iptables -C INPUT -i %s -j DROP",
+    snprintf(cmd, MAX_CMD_LEN, "%s iptables -C INPUT -i %s -j DROP -w",
              SWNS_EXEC, port_name);
     rc = system(cmd);
     if (rc != 0) {
 
-        snprintf(cmd, MAX_CMD_LEN, "%s iptables -A INPUT -i %s -j DROP",
+        snprintf(cmd, MAX_CMD_LEN, "%s iptables -A INPUT -i %s -j DROP -w",
                  SWNS_EXEC, port_name);
         if (system(cmd) != 0) {
             VLOG_ERR("Failed to add DROP rules: cmd=%s rc=%s", cmd,
                      strerror(errno));
         }
 
-        snprintf(cmd, MAX_CMD_LEN, "%s iptables -A FORWARD -i %s -j DROP",
+        snprintf(cmd, MAX_CMD_LEN, "%s iptables -A FORWARD -i %s -j DROP -w",
                  SWNS_EXEC, port_name);
         if (system(cmd) != 0) {
             VLOG_ERR("Failed to add DROP rules: cmd=%s rc=%s", cmd,
@@ -1726,7 +1726,7 @@ static void
 sflow_iptable_del_all(void)
 {
     /* delete all sflow related iptable rules in the system */
-    if ((system("iptables -S | sed \"/SFLOW/s/-A/iptables -D/e\"")) != 0) {
+    if ((system("iptables -S -w | sed \"/SFLOW/s/-A/iptables -w -D/e\"")) != 0) {
         VLOG_ERR("Failed to delete all iptable rules, rc=%s", strerror(errno));
         log_event("SFLOW_IPTABLES_DEL_ALL_FAILURE",
                   EV_KV("error", "%s", strerror(errno)));
@@ -1834,7 +1834,7 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
     char cmd_str[MAX_CMD_LEN];
     snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -I INPUT -i %s -m statistic --mode random --probability %0.12f -j NFLOG "
-            "--nflog-prefix SFLOW --nflog-group %d",
+            "--nflog-prefix SFLOW --nflog-group %d -w",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
@@ -1847,7 +1847,7 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
     }
     snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -I OUTPUT -o %s -m statistic --mode random --probability %0.12f -j NFLOG "
-            "--nflog-prefix SFLOW --nflog-group %d",
+            "--nflog-prefix SFLOW --nflog-group %d -w",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
@@ -1860,7 +1860,7 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
     }
     snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -I FORWARD -i %s -m statistic --mode random --probability %0.12f -j NFLOG "
-            "--nflog-prefix SFLOW --nflog-group %d",
+            "--nflog-prefix SFLOW --nflog-group %d -w",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
@@ -1873,7 +1873,7 @@ sflow_iptable_add(struct sim_sflow_cfg *sim_cfg, const char *port)
     }
     snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -I FORWARD -o %s -m statistic --mode random --probability %0.12f -j NFLOG "
-            "--nflog-prefix SFLOW --nflog-group %d",
+            "--nflog-prefix SFLOW --nflog-group %d -w",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to add FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
@@ -1893,7 +1893,7 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
     char cmd_str[MAX_CMD_LEN];
     snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -D INPUT -i %s -m statistic --mode random --probability %0.12f -j NFLOG "
-            "--nflog-prefix SFLOW --nflog-group %d",
+            "--nflog-prefix SFLOW --nflog-group %d -w",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del INPUT rule (%s). rc=%s", cmd_str, strerror(errno));
@@ -1906,7 +1906,7 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
     }
     snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -D OUTPUT -o %s -m statistic --mode random --probability %0.12f -j NFLOG "
-            "--nflog-prefix SFLOW --nflog-group %d",
+            "--nflog-prefix SFLOW --nflog-group %d -w",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del OUTPUT rule (%s). rc=%s", cmd_str, strerror(errno));
@@ -1919,7 +1919,7 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
     }
     snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -D FORWARD -i %s -m statistic --mode random --probability %0.12f -j NFLOG "
-            "--nflog-prefix SFLOW --nflog-group %d",
+            "--nflog-prefix SFLOW --nflog-group %d -w",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
@@ -1932,7 +1932,7 @@ sflow_iptable_del(struct sim_sflow_cfg *sim_cfg, const char *port)
     }
     snprintf(cmd_str, MAX_CMD_LEN,
             "%s iptables -D FORWARD -o %s -m statistic --mode random --probability %0.12f -j NFLOG "
-            "--nflog-prefix SFLOW --nflog-group %d",
+            "--nflog-prefix SFLOW --nflog-group %d -w",
             SWNS_EXEC, port, 1/(double)sim_cfg->sampling_rate, HOSTSFLOW_NFLOG_GRP);
     if (system(cmd_str) != 0) {
         VLOG_ERR("Failed to del FORWARD rule (%s). rc=%s", cmd_str, strerror(errno));
