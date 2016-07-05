@@ -71,6 +71,19 @@ int ops_cls_pd_remove(const struct uuid                *list_id,
                       enum ops_cls_direction           direction,
                       struct ops_cls_pd_status         *pd_status);
 
+/***************************************************************************//* *
+ * See @ref ofproto_ops_cls_lag_update
+ *****************************************************************************/
+int
+ops_cls_pd_lag_update(struct ops_cls_list             *list,
+                      struct ofproto                  *ofproto,
+                      void                            *aux,
+                      ofp_port_t                      ofp_port,
+                      int                             action,
+                      struct ops_cls_interface_info   *interface_info,
+                      enum ops_cls_direction          direction,
+                      struct ops_cls_pd_status        *pd_status);
+
 /***************************************************************************//**
  * See @ref ofproto_ops_cls_replace
  *****************************************************************************/
