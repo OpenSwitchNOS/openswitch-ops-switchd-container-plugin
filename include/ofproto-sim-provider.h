@@ -120,6 +120,7 @@ struct ofbundle {
                                          * bundle. */
     bool is_bridge_bundle;      /* If the bundle is internal for the bridge. */
     bool is_sflow_enabled;      /* If slow is enabled for this bundle */
+    int bond_hw_handle;         /* Allocated bond id. */
 };
 
 struct sim_provider_ofport {
