@@ -758,6 +758,8 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         bundle->is_vlan_routing_enabled = false;
         bundle->is_bridge_bundle = false;
         bundle->is_sflow_enabled = true;
+        /* Initialize bond_hw_handle */
+        bundle->bond_hw_handle = -1;
         mbridge_register_bundle(ofproto->mbridge, bundle);
     }
 
@@ -767,7 +769,16 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         ovs_assert(bundle->name);
         VLOG_DBG("bundle name is %s",bundle->name);
     }
-
+    if((-1 == bundle->bond_hw_handle) &&
+        (s->hw_bond_should_exist)) {
+        /* assign a random value to the bond_hw_handle */
+        bundle->bond_hw_handle = 123;
+    }
+    if((-1 != bundle->bond_hw_handle) &&
+        (false == s->hw_bond_should_exist)) {
+        /* destroy the LAG */
+        bundle_destroy(bundle);
+    }
     /* Update set of ports. */
     ok = true;
     VLOG_DBG("s->n_slaves %d", s->n_slaves);
@@ -938,14 +949,11 @@ bundle_remove(struct ofport *port_)
     struct ofbundle *bundle = port->bundle;
 
     if (bundle) {
-        bundle_del_port(port);
-
-        /* If there are no ports left, delete the bunble. */
-        if (list_is_empty(&bundle->ports)) {
+        if (bundle->bond_hw_handle == -1) {
+            bundle_del_port(port);
+            /* Since bundle is not lag, after deleting the port,
+               bundle is empty , hence delete bundle */
             bundle_destroy(bundle);
-        } else {
-            /* Re-configure the bundle with new config. */
-            bundle_configure(bundle);
         }
     }
 }
