@@ -53,6 +53,7 @@ VLOG_DEFINE_THIS_MODULE(ops_cls_sim);
 static struct  ops_cls_plugin_interface ops_cls_plugin =  {
     ops_cls_pd_apply,
     ops_cls_pd_remove,
+    ops_cls_pd_lag_update,
     ops_cls_pd_replace,
     ops_cls_pd_list_update,
     ops_cls_pd_statistics_get,
@@ -509,6 +510,20 @@ ops_cls_pd_remove(const struct uuid                *list_id,
     return 0;
 }
 
+int
+ops_cls_pd_lag_update(const struct uuid         *list_id,
+                      const char                      *list_name,
+                      enum ops_cls_type               list_type,
+                      struct ofproto                  *ofproto,
+                      void                            *aux,
+                      ofp_port_t                      ofp_port,
+                      int                             action,
+                      struct ops_cls_interface_info   *interface_info,
+                      enum ops_cls_direction          direction,
+                      struct ops_cls_pd_status        *pd_status)
+{
+    return 0;
+}
 
 int
 ops_cls_pd_replace(const struct uuid               *list_id_orig,
