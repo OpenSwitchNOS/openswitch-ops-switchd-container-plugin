@@ -56,10 +56,12 @@ def test_container_ct_sflow(topology, step):
     step("### Configuring sFlow ###")
     with ops1.libs.vtysh.Configure() as ctx:
         ctx.sflow_enable()
-        ctx.sflow_sampling(sampling_rate)
+        #ctx.sflow_sampling(sampling_rate)
+        ctx.sflow_polling(polling_interval)
         ctx.sflow_agent_interface(agent_interface)
         ctx.sflow_collector(collector_ip)
-        ctx.sflow_polling(polling_interval)
+        #ctx.sflow_polling(polling_interval)
+        ctx.sflow_sampling(sampling_rate)
 
     collector = {}
     collector['ip'] = collector_ip
@@ -96,6 +98,7 @@ def test_container_ct_sflow(topology, step):
             time.sleep(1)
     assert uuid_found, "SIM OVS sFlow configuration failed"
 
+    time.sleep(5)
     sflow_sim_cfg = ops1("/opt/openvswitch/bin/ovs-vsctl list sFlow",
                          shell="bash").splitlines()
     # Parsing the sFlow table output into key,value pairs

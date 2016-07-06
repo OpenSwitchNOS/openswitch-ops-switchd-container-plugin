@@ -380,7 +380,7 @@ netdev_sim_get_iptable_stats(char *port, bool ingress, uint64_t *pkts,
 
     *pkts = 0;
     *bytes = 0;
-    snprintf(cmd_str, sizeof(cmd_str), "%s iptables -S -v | grep SFLOW | grep '%c %s' "
+    snprintf(cmd_str, sizeof(cmd_str), "%s iptables -S -v -w | grep SFLOW | grep '%c %s' "
              "| awk -F ' ' '{print $12}' | awk '{ sum+=$1} END {print sum}'",
              SWNS_EXEC, ingress ? 'i' : 'o', port);
     fp = popen(cmd_str, "r");
@@ -392,7 +392,7 @@ netdev_sim_get_iptable_stats(char *port, bool ingress, uint64_t *pkts,
     *pkts = atoll(buffer);
     pclose(fp);
 
-    snprintf(cmd_str, sizeof(cmd_str), "%s iptables -S -v | grep SFLOW | grep '%c %s' "
+    snprintf(cmd_str, sizeof(cmd_str), "%s iptables -S -v -w | grep SFLOW | grep '%c %s' "
              "| awk -F ' ' '{print $13}' | awk '{ sum+=$1} END {print sum}'",
              SWNS_EXEC, ingress ? 'i' : 'o', port);
     fp = popen(cmd_str, "r");
@@ -912,13 +912,13 @@ netdev_sim_l3stats_xtables_rule_installed(const char *if_name,
     char cmd[256];
     int rc = 0;
     if (!strcmp(chain, "FORWARD")) {
-        snprintf(cmd, sizeof(cmd), "%s %s -C %s -i %s -m pkttype --pkt-type %s",
+        snprintf(cmd, sizeof(cmd), "%s %s -C %s -i %s -m pkttype --pkt-type %s -w",
                 SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
         rc = system(cmd);
         if (rc != 0) {
             return false;
         }
-        snprintf(cmd, sizeof(cmd), "%s %s -C %s -o %s -m pkttype --pkt-type %s",
+        snprintf(cmd, sizeof(cmd), "%s %s -C %s -o %s -m pkttype --pkt-type %s -w",
                 SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
         rc = system(cmd);
         if (rc != 0) {
@@ -928,7 +928,7 @@ netdev_sim_l3stats_xtables_rule_installed(const char *if_name,
     }
 
     char filter = !strcmp(chain, "INPUT") ? 'i' : 'o';
-    snprintf(cmd, sizeof(cmd), "%s %s -C %s -%c %s -m pkttype --pkt-type %s",
+    snprintf(cmd, sizeof(cmd), "%s %s -C %s -%c %s -m pkttype --pkt-type %s -w",
             SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
     rc = system(cmd);
     if (rc != 0) {
@@ -948,13 +948,13 @@ netdev_sim_l3stats_add_rule(const char *if_name, const char *xtables_cmd,
         if (!netdev_sim_l3stats_xtables_rule_installed(if_name,
                                                        xtables_cmd, chain,
                                                        pkttype)) {
-            snprintf(cmd, sizeof(cmd), "%s %s -A %s -i %s -m pkttype --pkt-type %s",
+            snprintf(cmd, sizeof(cmd), "%s %s -A %s -i %s -m pkttype --pkt-type %s -w",
                     SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
             rc = system(cmd);
             if (rc != 0) {
                 VLOG_DBG("Failed to execute - %s (rc=%d)", cmd, rc);
             }
-            snprintf(cmd, sizeof(cmd), "%s %s -A %s -o %s -m pkttype --pkt-type %s",
+            snprintf(cmd, sizeof(cmd), "%s %s -A %s -o %s -m pkttype --pkt-type %s -w",
                     SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
             rc = system(cmd);
             if (rc != 0) {
@@ -970,7 +970,7 @@ netdev_sim_l3stats_add_rule(const char *if_name, const char *xtables_cmd,
     if (!netdev_sim_l3stats_xtables_rule_installed(if_name,
                                                    xtables_cmd, chain,
                                                    pkttype)) {
-        snprintf(cmd, sizeof(cmd), "%s %s -A %s -%c %s -m pkttype --pkt-type %s",
+        snprintf(cmd, sizeof(cmd), "%s %s -A %s -%c %s -m pkttype --pkt-type %s -w",
                 SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
         rc = system(cmd);
         if (rc != 0) {
@@ -991,13 +991,13 @@ netdev_sim_l3stats_delete_rule(const char *if_name, const char *xtables_cmd,
         if (netdev_sim_l3stats_xtables_rule_installed(if_name,
                                                       xtables_cmd,
                                                       chain, pkttype)) {
-            snprintf(cmd, sizeof(cmd), "%s %s -D %s -i %s -m pkttype --pkt-type %s",
+            snprintf(cmd, sizeof(cmd), "%s %s -D %s -i %s -m pkttype --pkt-type %s -w",
                     SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
             rc = system(cmd);
             if (rc != 0) {
                 VLOG_DBG("Failed to execute - %s (rc=%d)", cmd, rc);
             }
-            snprintf(cmd, sizeof(cmd), "%s %s -D %s -o %s -m pkttype --pkt-type %s",
+            snprintf(cmd, sizeof(cmd), "%s %s -D %s -o %s -m pkttype --pkt-type %s -w",
                     SWNS_EXEC, xtables_cmd, chain, if_name, pkttype);
             rc = system(cmd);
             if (rc != 0) {
@@ -1011,7 +1011,7 @@ netdev_sim_l3stats_delete_rule(const char *if_name, const char *xtables_cmd,
     /* Delete rule if it exists */
     if (netdev_sim_l3stats_xtables_rule_installed(if_name, xtables_cmd,
                                                   chain, pkttype)) {
-        snprintf(cmd, sizeof(cmd), "%s %s -D %s -%c %s -m pkttype --pkt-type %s",
+        snprintf(cmd, sizeof(cmd), "%s %s -D %s -%c %s -m pkttype --pkt-type %s -w",
                 SWNS_EXEC, xtables_cmd, chain, filter, if_name, pkttype);
         rc = system(cmd);
         if (rc != 0) {
@@ -1289,11 +1289,11 @@ netdev_sim_parse_xtables_l3_stats(const char *if_name,
 
     if (is_ingress) {
         /* Get L3 RX stats */
-        snprintf(cmd, sizeof(cmd), "%s %s -S -v | awk '$3 == \"-i\" && $4 == \"%s\" && $6 == \"pkttype\"{print $10,$11}'",
+        snprintf(cmd, sizeof(cmd), "%s %s -S -v -w | awk '$3 == \"-i\" && $4 == \"%s\" && $6 == \"pkttype\"{print $10,$11}'",
                  SWNS_EXEC, is_v6 ? "ip6tables" : "iptables" , if_name);
     } else {
         /* Get L3 TX stats */
-        snprintf(cmd, sizeof(cmd), "%s %s -S -v | awk '$3 == \"-o\" && $4 == \"%s\" && $6 == \"pkttype\"{print $10,$11}'",
+        snprintf(cmd, sizeof(cmd), "%s %s -S -v -w | awk '$3 == \"-o\" && $4 == \"%s\" && $6 == \"pkttype\"{print $10,$11}'",
                  SWNS_EXEC, is_v6 ? "ip6tables" : "iptables" , if_name);
     }
 
