@@ -84,14 +84,19 @@ def test_container_ct_sflow(topology, step):
     step("### Verifying sFlow configuration in Sim OVS ###")
     # Wait until sFlow row is created in sim ovsdb
     uuid_found = False
-    while not uuid_found:
+    counter = 0
+    # Try for 30 seconds then quit
+    while not uuid_found and counter < 30:
         uuid_sflow = ops1("/opt/openvswitch/bin/ovs-vsctl get bridge "
                           "bridge_normal sflow", shell="bash")
         if uuid_sflow != '[]':
             uuid_found = True
         else:
+            counter += 1
             time.sleep(1)
+    assert uuid_found, "SIM OVS sFlow configuration failed"
 
+    time.sleep(5)
     sflow_sim_cfg = ops1("/opt/openvswitch/bin/ovs-vsctl list sFlow",
                          shell="bash").splitlines()
     # Parsing the sFlow table output into key,value pairs
@@ -110,17 +115,27 @@ def test_container_ct_sflow(topology, step):
     # Check Sim OVS sFlow configuration
     step("Expected sFlow configuration: " + str(expected_cfg))
     step("Sim OVS sFlow configuration: " + str(sim_ovs_cfg))
-    assert expected_cfg == sim_ovs_cfg
+    assert expected_cfg == sim_ovs_cfg, "SIM OVS configuration mismatch"
 
     step("### Verifying sFlow configuration set in hsflowd.conf file ###")
     # Wait until hsflowd has started
     hsflowd_started = False
-    while not hsflowd_started:
-        ps_cmd = ops1("ps -aef | grep hsflowd", shell="bash").splitlines()
-        if len(ps_cmd) > 1:
+    counter = 0
+    # grep command which includes the pattern to identify
+    # hsflowd has started with a UUID
+    grep_cmd = "ps -aef | egrep '.*/usr/sbin/hsflowd -u "\
+               "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"\
+               "[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'"
+    # Try for 30 seconds then quit
+    while not hsflowd_started and counter < 30:
+        ps_cmd = ops1(grep_cmd, shell="bash").splitlines()
+        if len(ps_cmd) == 1:
             hsflowd_started = True
         else:
+            counter += 1
             time.sleep(1)
+    assert hsflowd_started, "hsflowd did not start"
+
     hsflowd_conf = ops1("cat /etc/hsflowd.conf", shell="bash").splitlines()
     # Create a dict from hsflowd.conf file
     hsflowd_cfg = {}
@@ -141,5 +156,5 @@ def test_container_ct_sflow(topology, step):
     # Check hsflowd configuration
     step("Expected sFlow configuration: " + str(expected_cfg))
     step("hsflowd configuration: " + str(hsflowd_cfg))
-    assert expected_cfg == hsflowd_cfg
+    assert expected_cfg == hsflowd_cfg, "hsflowd configuration mismatch"
     step("### sFlow configuration in hsflowd.conf successfully verified ###")
