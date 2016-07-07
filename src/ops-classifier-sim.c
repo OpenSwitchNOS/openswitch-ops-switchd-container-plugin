@@ -511,9 +511,7 @@ ops_cls_pd_remove(const struct uuid                *list_id,
 }
 
 int
-ops_cls_pd_lag_update(const struct uuid         *list_id,
-                      const char                      *list_name,
-                      enum ops_cls_type               list_type,
+ops_cls_pd_lag_update(struct ops_cls_list             *list,
                       struct ofproto                  *ofproto,
                       void                            *aux,
                       ofp_port_t                      ofp_port,
