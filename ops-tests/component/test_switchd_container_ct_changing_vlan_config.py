@@ -33,6 +33,7 @@ TOPOLOGY = """
 """
 
 
+@mark.gate
 @mark.platform_incompatible(['ostl'])
 def test_switchd_container_ct_changing_vlan_config(topology, step):
     ops1 = topology.get("ops1")
