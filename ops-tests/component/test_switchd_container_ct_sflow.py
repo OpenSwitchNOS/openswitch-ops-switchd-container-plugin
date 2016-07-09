@@ -35,6 +35,7 @@ TOPOLOGY = """
 """
 
 
+@mark.gate
 @mark.platform_incompatible(['ostl'])
 def test_container_ct_sflow(topology, step):
     ops1 = topology.get('ops1')

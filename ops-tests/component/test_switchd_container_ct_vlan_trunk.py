@@ -39,6 +39,7 @@ ops1:if02 -- ops2:if02
 """
 
 
+@mark.gate
 @mark.platform_incompatible(['ostl'])
 def test_switchd_container_ct_vlan_trunk(topology, step):
     ops1 = topology.get("ops1")

@@ -38,6 +38,7 @@ ops1:if02 -- hs2:eth0
 """
 
 
+@mark.gate
 @mark.platform_incompatible(['ostl'])
 def test_switchd_container_ct_if_stats(topology, step):
     ops1 = topology.get("ops1")
