@@ -261,18 +261,35 @@ dump_port_bindings(struct unixctl_conn * conn, int argc, const char *argv[],
     struct ds ds = DS_EMPTY_INITIALIZER;
     struct acl_port_bindings *port, *next_port;
     struct acl_hashmap *acl;
+    unsigned int max_acl_name_len = 0;
 
-    ds_put_format(&ds, "Port             ACL    \n");
-    ds_put_format(&ds, "------------------------\n");
+    const char *direction_str[OPS_CLS_NUM_DIRECTION] = {"invalid", "in", "out"};
+
+    /* Find the largest acl name */
     HMAP_FOR_EACH_SAFE(port, next_port, list_node,
                             &all_port_applications) {
+        acl = acl_lookup_by_uuid(&port->list_id);
+        if (acl) {
+            unsigned int cur_acl_name_len = strlen(acl->list->list_name);
+            if(max_acl_name_len < cur_acl_name_len) {
+                max_acl_name_len = cur_acl_name_len;
+            }
+        }
+    }
+
+    ds_put_format(&ds, "Port %-*s Direction\n", max_acl_name_len, "ACL");
+    ds_put_char_multiple(&ds, '-', ds.length - 1);
+    ds_put_char__(&ds, '\n');
+    HMAP_FOR_EACH_SAFE(port, next_port, list_node,
+                            &all_port_applications) {
+
         acl = acl_lookup_by_uuid(&port->list_id);
         if (!acl) {
             VLOG_ERR("No ACL found for port %u\n", port->port);
             continue;
         }
-        ds_put_format(&ds, "%u             %s\n", port->port,
-                      acl->list->list_name);
+        ds_put_format(&ds, "%-4u %-*s %s\n", port->port, max_acl_name_len,
+                       acl->list->list_name, direction_str[port->direction]);
     }
     unixctl_command_reply(conn, ds_cstr(&ds));
     ds_destroy(&ds);
