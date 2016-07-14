@@ -48,7 +48,7 @@ static struct plugin_extension_interface qos_extension;
 #define MIRROR_OUTPUT_PORT_CMD_MIN_LEN 56
 
 /* This struct needs to move to ofproto.h after Dill */
-struct ofproto_mirror_bundle {
+struct ofproto_mirror_bundle_ {
     struct ofproto *ofproto;
     void           *aux;
 };
@@ -995,8 +995,8 @@ mirror_set(struct ofproto *ofproto_, void *aux,
     int i = 0, n = 0, retval = 0;
     struct mirror *mirror;
     struct mbridge *mbridge;
-    struct ofproto_mirror_bundle *srcs, *dsts;
-    struct ofproto_mirror_bundle *outmb;
+    struct ofproto_mirror_bundle_ *srcs, *dsts;
+    struct ofproto_mirror_bundle_ *outmb;
     struct ofbundle **bndlSrcs = NULL, **bndlDsts = NULL;
     struct hmapx srcs_map; /* Contains "struct ofbundle *"s. */
     struct hmapx dsts_map; /* Contains "struct ofbundle *"s. */
@@ -1041,11 +1041,11 @@ mirror_set(struct ofproto *ofproto_, void *aux,
             mirrorModify = true;
         }
 
-        srcs = (struct ofproto_mirror_bundle *)(s->srcs);
-        dsts = (struct ofproto_mirror_bundle *)(s->dsts);
+        srcs = (struct ofproto_mirror_bundle_ *)(s->srcs);
+        dsts = (struct ofproto_mirror_bundle_ *)(s->dsts);
 
         if (s->out_bundle) {
-            outmb = (struct ofproto_mirror_bundle *)(s->out_bundle);
+            outmb = (struct ofproto_mirror_bundle_ *)(s->out_bundle);
             if (ofproto_ != outmb->ofproto) {
                 mirror_destroy(mbridge, mirror->aux);
                 VLOG_ERR(
