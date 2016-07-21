@@ -24,6 +24,7 @@
 #include "config.h"
 #include "ofproto/ofproto-provider.h"
 #include "ofproto/bond.h"
+#include "ofproto/ofproto.h"
 #include "plugin-extensions.h"
 #include "qos-asic-provider.h"
 #include "ofproto/tunnel.h"
@@ -46,11 +47,6 @@ VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
 static struct plugin_extension_interface qos_extension;
 
 #define MIRROR_OUTPUT_PORT_CMD_MIN_LEN 56
-
-struct ofproto_mirror_bundle_ {
-    struct ofproto *ofproto;
-    void           *aux;
-};
 
 static struct sim_provider_ofport *
 sim_provider_ofport_cast(const struct ofport *ofport)
@@ -994,8 +990,8 @@ mirror_set(struct ofproto *ofproto_, void *aux,
     int i = 0, n = 0, retval = 0;
     struct mirror *mirror;
     struct mbridge *mbridge;
-    struct ofproto_mirror_bundle_ *srcs, *dsts;
-    struct ofproto_mirror_bundle_ *outmb;
+    struct ofproto_mirror_bundle *srcs, *dsts;
+    struct ofproto_mirror_bundle *outmb;
     struct ofbundle **bndlSrcs = NULL, **bndlDsts = NULL;
     struct hmapx srcs_map; /* Contains "struct ofbundle *"s. */
     struct hmapx dsts_map; /* Contains "struct ofbundle *"s. */
@@ -1040,11 +1036,11 @@ mirror_set(struct ofproto *ofproto_, void *aux,
             mirrorModify = true;
         }
 
-        srcs = (struct ofproto_mirror_bundle_ *)(s->srcs);
-        dsts = (struct ofproto_mirror_bundle_ *)(s->dsts);
+        srcs = (struct ofproto_mirror_bundle *)(s->srcs);
+        dsts = (struct ofproto_mirror_bundle *)(s->dsts);
 
         if (s->out_bundle) {
-            outmb = (struct ofproto_mirror_bundle_ *)(s->out_bundle);
+            outmb = (struct ofproto_mirror_bundle *)(s->out_bundle);
             if (ofproto_ != outmb->ofproto) {
                 mirror_destroy(mbridge, mirror->aux);
                 VLOG_ERR(
