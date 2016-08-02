@@ -96,6 +96,7 @@ def test_container_ct_sflow(topology, step):
             time.sleep(1)
     assert uuid_found, "SIM OVS sFlow configuration failed"
 
+    time.sleep(5)
     sflow_sim_cfg = ops1("/opt/openvswitch/bin/ovs-vsctl list sFlow",
                          shell="bash").splitlines()
     # Parsing the sFlow table output into key,value pairs
