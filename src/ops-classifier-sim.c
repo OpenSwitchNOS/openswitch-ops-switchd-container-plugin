@@ -263,7 +263,7 @@ dump_port_bindings(struct unixctl_conn * conn, int argc, const char *argv[],
     struct acl_hashmap *acl;
     unsigned int max_acl_name_len = 0;
 
-    const char *direction_str[OPS_CLS_NUM_DIRECTION] = {"invalid", "in", "out"};
+    const char *direction_str[OPS_CLS_MAX_DIRECTION] = {"invalid", "in", "out"};
 
     /* Find the largest acl name */
     HMAP_FOR_EACH_SAFE(port, next_port, list_node,
