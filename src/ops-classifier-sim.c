@@ -89,6 +89,8 @@ struct acl_port_bindings {
      struct hmap_node list_node;  /**< Hash by list_id */
      struct uuid list_id;         /**< list_id of the ACL */
      ofp_port_t  port;            /**< Port on which ACL is applied */
+     char *interface_name; /**< name of the port as seen in CLI */
+     char *lag_name; /**< name of the lag if any */
      struct ops_cls_interface_info interface_info; /**< Interface information */
      enum ops_cls_direction  direction; /**< Direction in which ACL is applied */
      struct ops_cls_statistics stats[MAX_ACE_PER_ACL]; /**< stats per ace */
@@ -277,7 +279,7 @@ dump_port_bindings(struct unixctl_conn * conn, int argc, const char *argv[],
         }
     }
 
-    ds_put_format(&ds, "Port %-*s Direction\n", max_acl_name_len, "ACL");
+    ds_put_format(&ds, "Interface %-*s Direction  Bundle\n", max_acl_name_len, "ACL");
     ds_put_char_multiple(&ds, '-', ds.length - 1);
     ds_put_char__(&ds, '\n');
     HMAP_FOR_EACH_SAFE(port, next_port, list_node,
@@ -288,8 +290,8 @@ dump_port_bindings(struct unixctl_conn * conn, int argc, const char *argv[],
             VLOG_ERR("No ACL found for port %u\n", port->port);
             continue;
         }
-        ds_put_format(&ds, "%-4u %-*s %s\n", port->port, max_acl_name_len,
-                       acl->list->list_name, direction_str[port->direction]);
+        ds_put_format(&ds, "%-9s %-*s %-9s %-11s\n", port->interface_name, max_acl_name_len,
+                       acl->list->list_name, direction_str[port->direction], port->lag_name);
     }
     unixctl_command_reply(conn, ds_cstr(&ds));
     ds_destroy(&ds);
@@ -410,6 +412,8 @@ ops_cls_pd_apply(struct ops_cls_list            *list,
     struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
     bool port_found = false;
     int idx = 0;
+    int name_len;
+    char *port_name;
 
     VLOG_DBG("%s called\n", __func__);
 
@@ -436,27 +440,32 @@ ops_cls_pd_apply(struct ops_cls_list            *list,
     LIST_FOR_EACH_SAFE(ofport, next_port, bundle_node, &bundle->ports) {
         port = ofport->up.ofp_port;
         port_found = true;
-        break;
+
+        /* Create the binding for each port in the binding, suppose
+           in case of lags all interfaces in lag will have an hash entry*/
+        acl_port_binding = xzalloc(sizeof(struct acl_port_bindings));
+        memcpy(&acl_port_binding->list_id, &list->list_id, sizeof(struct uuid));
+        memcpy(&acl_port_binding->interface_info, interface_info,
+               sizeof(struct ops_cls_interface_info));
+        acl_port_binding->port = port;
+        acl_port_binding->lag_name = xstrdup(bundle->name);
+        acl_port_binding->interface_name = xstrdup(ofport->up.pp.name);
+        acl_port_binding->direction = direction;
+        for (idx = 0; idx < MAX_ACE_PER_ACL; idx++) {
+            /* set stats defaults */
+            acl_port_binding->stats[idx].stats_enabled = 1;
+            acl_port_binding->stats[idx].hitcounts = 0;
+        }
+        hmap_insert(&all_port_applications, &acl_port_binding->list_node,
+                    uuid_hash(&acl_port_binding->list_id));
+
+
     }
     if (!port_found) {
         VLOG_ERR("Port not found in the bundle\n");
         return -1;
     }
 
-    /* Create the binding */
-    acl_port_binding = xzalloc(sizeof(struct acl_port_bindings));
-    memcpy(&acl_port_binding->list_id, &list->list_id, sizeof(struct uuid));
-    memcpy(&acl_port_binding->interface_info, interface_info,
-           sizeof(struct ops_cls_interface_info));
-    acl_port_binding->port = port;
-    acl_port_binding->direction = direction;
-    for (idx = 0; idx < MAX_ACE_PER_ACL; idx++) {
-        /* set stats defaults */
-        acl_port_binding->stats[idx].stats_enabled = 1;
-        acl_port_binding->stats[idx].hitcounts = 0;
-    }
-    hmap_insert(&all_port_applications, &acl_port_binding->list_node,
-                uuid_hash(&acl_port_binding->list_id));
     return 0;
 }
 
@@ -477,7 +486,6 @@ ops_cls_pd_remove(const struct uuid                *list_id,
     struct sim_provider_ofport *ofport, *next_port;
     struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
     ofp_port_t port;
-    bool port_found = false;
 
     VLOG_DBG("%s called\n", __func__);
 
@@ -498,12 +506,6 @@ ops_cls_pd_remove(const struct uuid                *list_id,
 
     LIST_FOR_EACH_SAFE(ofport, next_port, bundle_node, &bundle->ports) {
         port = ofport->up.ofp_port;
-        port_found = true;
-        break;
-    }
-
-    /* Search for the acl_port_bindings binding */
-    if (port_found) {
         HMAP_FOR_EACH_IN_BUCKET(acl_port_binding, list_node, uuid_hash(list_id),
             &all_port_applications) {
             if (acl_port_binding->port == port) {
@@ -537,7 +539,76 @@ ops_cls_pd_lag_update(struct ops_cls_list             *list,
                       enum ops_cls_direction          direction,
                       struct ops_cls_pd_status        *pd_status)
 {
-    return 0;
+    struct acl_hashmap *acl;
+    struct ofbundle *bundle;
+    struct sim_provider_ofport *ofport, *next_port;
+    bool port_found = true;
+    struct acl_port_bindings *acl_port_binding;
+    int idx = 0;
+    struct sim_provider_node *ofproto_sim = sim_provider_node_cast(ofproto);
+
+    VLOG_DBG("%s called\n", __func__);
+
+    if (!list) {
+       VLOG_ERR("List cannot be null\n");
+       return -1;
+    }
+
+    /* Find the list */
+    acl = acl_lookup_by_uuid(&list->list_id);
+
+    if (!acl) {
+        /* Create a new ACL entry */
+        acl_create(list);
+        VLOG_DBG("List %s created\n", list->list_name);
+    } else {
+        VLOG_DBG("Classifier %s exist in hashmap", list->list_name);
+    }
+    bundle = bundle_lookup(ofproto_sim, aux);
+    if (!bundle) {
+        VLOG_ERR("Bundle not found\n");
+        return -1;
+    }
+
+    if (action & OPS_CLS_LAG_MEMBER_INTF_ADD) {
+        LIST_FOR_EACH_SAFE(ofport, next_port, bundle_node, &bundle->ports) {
+            if(ofp_port != ofport->up.ofp_port) {
+                continue;
+            }
+            /* acl is not applied to the port, go ahead and apply */
+            acl_port_binding = xzalloc(sizeof(struct acl_port_bindings));
+            memcpy(&acl_port_binding->list_id, &list->list_id, sizeof(struct uuid));
+            memcpy(&acl_port_binding->interface_info, interface_info,
+                   sizeof(struct ops_cls_interface_info));
+            acl_port_binding->port = ofp_port;
+            acl_port_binding->direction = direction;
+            acl_port_binding->lag_name = xstrdup(bundle->name);
+            acl_port_binding->interface_name = xstrdup(ofport->up.pp.name);
+            for (idx = 0; idx < MAX_ACE_PER_ACL; idx++) {
+                /* set stats defaults */
+                acl_port_binding->stats[idx].stats_enabled = 1;
+                acl_port_binding->stats[idx].hitcounts = 0;
+            }
+            hmap_insert(&all_port_applications, &acl_port_binding->list_node,
+                        uuid_hash(&acl_port_binding->list_id));
+            break;
+        }
+    }
+    else
+    {
+        /* delete operation */
+        HMAP_FOR_EACH_IN_BUCKET(acl_port_binding, list_node, uuid_hash(&list->list_id),
+            &all_port_applications) {
+            if (acl_port_binding->port == ofp_port) {
+                /* Remove the acl_port_bindings binding */
+                hmap_remove(&all_port_applications, &acl_port_binding->list_node);
+                free(acl_port_binding);
+                acl_port_binding = NULL;
+                break;
+            }
+        }
+   }
+   return 0;
 }
 
 int
