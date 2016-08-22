@@ -39,9 +39,15 @@
 #include "ofproto-sim-provider.h"
 #include "vswitch-idl.h"
 #include "eventlog.h"
+#include "netdev-vport-sim.h"
+#include "netinet/in.h"
 #include "ops-classifier-sim.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto_provider_sim);
+
+#define MAX_CMD_LEN             2048
+#define SWNS_EXEC               "/sbin/ip netns exec swns"
+#define SIM_USER_SPACE_MODE     1
 
 static struct plugin_extension_interface qos_extension;
 
@@ -189,6 +195,7 @@ static int
 construct(struct ofproto *ofproto_)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
+    struct shash_node *node, *next;
     int error = 0;
     char cmd_str[MAX_CMD_LEN];
 
@@ -196,9 +203,16 @@ construct(struct ofproto *ofproto_)
      * name in ASIC OVS. In ASIC OVS creating a bridge also creates a bundle &
      * port with the same name. The port will be 'internal' type. */
     if (strcmp(ofproto_->type, "system") == 0) {
-
+#ifdef SIM_USER_SPACE_MODE
         snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s -- set bridge %s datapath_type=netdev",
-                 OVS_VSCTL, ofproto->up.name, ofproto->up.name);
+                     OVS_VSCTL, ofproto->up.name, ofproto->up.name);
+
+#else
+        snprintf(cmd_str, MAX_CMD_LEN, "%s --may-exist add-br %s",
+                 OVS_VSCTL, ofproto->up.name);
+
+#endif
+
         if (system(cmd_str) != 0) {
             VLOG_ERR("Failed to add bridge in ASIC OVS. cmd=%s, rc=%s",
                      cmd_str, strerror(errno));
@@ -348,6 +362,22 @@ port_construct(struct ofport *port_)
 static void
 port_destruct(struct ofport *port_ OVS_UNUSED)
 {
+	struct sim_provider_ofport *port = sim_provider_ofport_cast(port_);
+    const char *devname = netdev_get_name(port->up.netdev);
+    const char *devtype = netdev_get_type(port->up.netdev);
+    const char *br_name = port->up.ofproto->name;
+    int error = 0;
+    char cmd_str[MAX_CMD_LEN];
+
+    if(!strcmp(devtype,OVSREC_INTERFACE_TYPE_VXLAN) )
+    {
+      snprintf(cmd_str, MAX_CMD_LEN, "%s del-port %s %s", OVS_VSCTL,br_name,devname);
+      if(system(cmd_str) != 0)
+      {
+        VLOG_ERR("ERROR %s can't exec cmd %s error %s", __FUNCTION__, cmd_str, strerror(errno));
+        error = 1;
+      }
+    }
     return;
 }
 
@@ -826,6 +856,10 @@ found:     ;
             type = netdev_get_type(port->up.netdev);
         }
 
+        if ((type != NULL)
+            && (strcmp(type, OVSREC_INTERFACE_TYPE_VXLAN) == 0) ) {
+            return 0;
+        }
         /* Configure trunk for bridge interface so we receive vlan frames on
          * internal vlan interfaces created on top of bridge. Skip this for
          * internal interface is bridge internal interface with same name as
@@ -1429,12 +1463,71 @@ port_query_by_name(const struct ofproto *ofproto_, const char *devname,
     return ENODEV;
 
 }
+static int
+port_sim_add( struct netdev *netdev, char *br)
+{
+    int error = 0;
+    char cmd_str[MAX_CMD_LEN];
+    struct eth_addr mac;
+    char mac_string[32];
+    const char *devname = netdev_get_name(netdev);
+    const char *devtype = netdev_get_type(netdev);
+    if(!strcmp(devtype, OVSREC_INTERFACE_TYPE_VXLAN)) {
+        const struct netdev_tunnel_config *tnl_cfg = netdev_get_tunnel_config(netdev);
+        if (tnl_cfg) {
+            char buf[INET_ADDRSTRLEN];
+            char tunnel_key[32];
+            if(tnl_cfg->in_key_present)
+            {
+                if(tnl_cfg->in_key_flow) {
+                    strcpy(tunnel_key,"flow");
+                } else {
+                    snprintf(tunnel_key, 32,"%llu", htonll(tnl_cfg->in_key));
+                }
+            }
+            ovs_be32 ip_dst = in6_addr_get_mapped_ipv4(&tnl_cfg->ipv6_dst);
+            inet_ntop (AF_INET, &ip_dst, buf, INET_ADDRSTRLEN);
+            snprintf(cmd_str, MAX_CMD_LEN, "%s add-port %s %s "
+                 "-- set interface %s type=%s option:remote_ip=%s option:key=%s",
+                 OVS_VSCTL, br, devname, devname,devtype,buf,tunnel_key);
+            VLOG_DBG("%s %s", __FUNCTION__, cmd_str);
+            if (system(cmd_str) != 0) {
+               VLOG_ERR("Failed to add port in ASIC OVS. cmd=%s, rc=%s",
+                 cmd_str, strerror(errno));
+               error = 1;
+            }
+        }
 
+       error = netdev_get_etheraddr(netdev, &mac);
+       if (!error) {
+           sprintf(mac_string, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
+           VLOG_INFO("%s mac_address %s ",__FUNCTION__, mac_string);
+
+       }
+
+       sprintf(cmd_str, "%s /sbin/ip link set %s address %s",
+               SWNS_EXEC, devname, mac_string);
+       if (system(cmd_str) != 0) {
+           VLOG_ERR("NETDEV-SIM | system command failure cmd=%s", cmd_str);
+       }
+       snprintf(cmd_str, MAX_CMD_LEN, "%s /sbin/ip link set dev %s up",
+                SWNS_EXEC, devname);
+       if (system(cmd_str) != 0) {
+           VLOG_ERR("Failed to set link state. cmd=%s, rc=%s", cmd_str,
+                    strerror(errno));
+           error = 1;
+       }
+
+    }
+}
 static int
 port_add(struct ofproto *ofproto_, struct netdev *netdev)
 {
     struct sim_provider_node *ofproto = sim_provider_node_cast(ofproto_);
     const char *devname = netdev_get_name(netdev);
+    const char *devtype = netdev_get_type(netdev);
+    VLOG_INFO("VXLAN_POC %s port_add devname %s, %s , %s ",__FUNCTION__, devname, ofproto->up.name, devtype) ;
+    port_sim_add(netdev, ofproto->up.name);
 
     sset_add(&ofproto->ports, devname);
     return 0;

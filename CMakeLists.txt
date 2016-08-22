@@ -25,7 +25,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu99 -Werror")
 ###
 
 set (SOURCES ${SRC_DIR}/sim-plugins.c ${SRC_DIR}/netdev-sim.c
-${SRC_DIR}/ofproto-sim-provider.c ${SRC_DIR}/sim-copp-plugin.c
+${SRC_DIR}/ofproto-sim-provider.c ${SRC_DIR}/netdev-vport-sim.c ${SRC_DIR}/sim-copp-plugin.c
 ${SRC_DIR}/ops-classifier-sim.c)
 
 ###

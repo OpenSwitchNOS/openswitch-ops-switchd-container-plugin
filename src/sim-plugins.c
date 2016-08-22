@@ -20,6 +20,7 @@
 #include "ofproto/ofproto-provider.h"
 #include "netdev-sim.h"
 #include "ofproto-sim-provider.h"
+#include "netdev-vport-sim.h"
 #include "eventlog.h"
 #include "sim-copp-plugin.h"
 #include "ops-classifier-sim.h"
@@ -107,6 +108,8 @@ void
 netdev_register(void)
 {
     netdev_sim_register();
+
+    netdev_vport_sim_register();
 }
 
 void
