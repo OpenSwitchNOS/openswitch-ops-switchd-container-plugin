@@ -32,6 +32,8 @@ TOPOLOGY = """
 [type=openswitch name="OpenSwitch 1"] ops1
 """
 
+# Timeout in seconds to wait for ops-switchd to come up
+ops_switchd_active_timeout = 60
 
 @mark.platform_incompatible(['ostl'])
 def test_switchd_container_ct_switchd_restartability(topology, step):
@@ -62,6 +64,17 @@ def test_switchd_container_ct_switchd_restartability(topology, step):
 
     step("Step 5- 'Starting' switchd service")
     ops1("systemctl start switchd", shell="bash")
+    for i in range(0, ops_switchd_active_timeout):
+        is_switchd_active = ops1("systemctl is-active switchd.service",
+                                 shell="bash")
+        if not is_switchd_active == 'active':
+            step("Waiting for ops-switchd to come up")
+            sleep(1)
+        else:
+            break
+    else:
+        raise Exception('Timed out while waiting for ops-switchd '
+                        'to come up')
 
     step("Step 6- Verifying that port 3 got deleted from the 'ASIC' OVS "
          "database")
