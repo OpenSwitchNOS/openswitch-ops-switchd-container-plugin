@@ -53,6 +53,7 @@ VLOG_DEFINE_THIS_MODULE(ops_cls_sim);
 static struct  ops_cls_plugin_interface ops_cls_plugin =  {
     ops_cls_pd_apply,
     ops_cls_pd_remove,
+    NULL,
     ops_cls_pd_replace,
     ops_cls_pd_list_update,
     ops_cls_pd_statistics_get,
