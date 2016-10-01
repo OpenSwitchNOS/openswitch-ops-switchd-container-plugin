@@ -44,7 +44,11 @@
 /** Define logging module */
 VLOG_DEFINE_THIS_MODULE(ops_cls_sim);
 
-#define MAX_ACE_PER_ACL 512  /**< max entries per acl */
+#define MAX_ACE_PER_ACL        512             /**< max entries per acl */
+
+/* Used in test functions */
+#define MAX_ACE_IN_HASHMAP         MAX_ACE_PER_ACL /**< max aces in all acls */
+#define LAG_ROLLBACK_TEST_ACL_NAME "LAGRollbackACL" /**< ACL name for rollback test */
 
 /**************************************************************************//**
  * OPS_CLS plugin interface definition. This is the instance containing all
@@ -286,6 +290,84 @@ dump_port_bindings(struct unixctl_conn * conn, int argc, const char *argv[],
 }
 
 /**************************************************************************//**
+ * A function to count the current aces in all acls in the
+ * hashmap.
+ *
+ * @return    A non-negative value of aces count
+ *****************************************************************************/
+static uint16_t
+acl_get_current_ace_entries_count(void)
+{
+    struct acl_hashmap *acl, *next_acl;
+    uint16_t current_ace_count = 0;
+
+    HMAP_FOR_EACH_SAFE(acl, next_acl, uuid_node, &all_acls) {
+        current_ace_count += acl->list->num_entries;
+    }
+
+    return current_ace_count;
+}
+
+/**************************************************************************//**
+ * A function to check if the new ACL list can fit in the
+ * hashmap containing all the acls.
+ *
+ * @param[in]  new_list - The new acl list
+ *
+ * @return     true - If the new ACL list fits in the hashmap
+ *             false - If the list doesn't fit in the hashmap
+ *****************************************************************************/
+static bool
+acl_list_entries_fit_in_hashmap(struct ops_cls_list *new_list)
+{
+    uint16_t num_current_entries = 0;
+
+    if (new_list == NULL) {
+        return false;
+    }
+
+    num_current_entries = acl_get_current_ace_entries_count();
+    if (num_current_entries == MAX_ACE_IN_HASHMAP) {
+        return false;
+    } else if (num_current_entries < MAX_ACE_IN_HASHMAP) {
+        if ((MAX_ACE_IN_HASHMAP - num_current_entries) >=
+            new_list->num_entries) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**************************************************************************//**
+ * A function to check if the ACL list is a rollback test list
+ * NOTE: The 'rollbackACL' list is used to test ACL rollback
+ * scenario. This function is stub function, in order to test
+ * rollback scenario
+ *
+ * @param[in]  list - The acl list
+ *
+ * @return     true - If list name matches the rollback test
+ *                    list name
+ *             false - If list name doesn't match with rollback
+ *                     test list name
+ *****************************************************************************/
+static bool
+acl_list_is_rollback_test_list(struct ops_cls_list *list)
+{
+    if (list == NULL) {
+        return false;
+    }
+
+    if ((list->list_name != NULL) &&
+        (strcmp(list->list_name, LAG_ROLLBACK_TEST_ACL_NAME) == 0)) {
+        return true;
+    }
+
+    return false;
+}
+
+/**************************************************************************//**
  * A function to deep copy the contents of input ACL into an existing
  * ACL entry. The UUID, name and type should be the same in to and from lists.
  * The ACEs could change and hence the memory is realloced and the contents
@@ -414,15 +496,30 @@ ops_cls_pd_apply(struct ops_cls_list            *list,
     /* Find the list */
     acl = acl_lookup_by_uuid(&list->list_id);
     if (!acl) {
-        /* Create a new ACL entry */
-        acl_create(list);
-        VLOG_DBG("List %s created\n", list->list_name);
+        /* A maximum of 512 aces in all ACLs is allowed.
+           This enables to test few scenarios in container */
+        if (acl_list_entries_fit_in_hashmap(list)) {
+            /* Create a new ACL entry */
+            acl_create(list);
+            VLOG_DBG("List %s created\n", list->list_name);
+        }
+        else {
+            VLOG_DBG("List entries %d cannot fit in hashmap\n",
+                     list->num_entries);
+            if (pd_status) {
+                pd_status->status_code = OPS_CLS_STATUS_HW_FULL_ERR;
+            }
+            return -1;
+        }
     }
 
     /* Find the port */
     bundle = bundle_lookup(ofproto_sim, aux);
     if (!bundle) {
         VLOG_ERR("Bundle not found\n");
+        if (pd_status) {
+            pd_status->status_code = OPS_CLS_STATUS_HW_NOT_FOUND_ERR;
+        }
         return -1;
     }
 
@@ -462,11 +559,12 @@ ops_cls_pd_apply(struct ops_cls_list            *list,
         }
         hmap_insert(&all_port_applications, &acl_port_binding->list_node,
                     uuid_hash(&acl_port_binding->list_id));
-
-
     }
     if (!port_found) {
         VLOG_ERR("Port not found in the bundle\n");
+        if (pd_status) {
+            pd_status->status_code = OPS_CLS_STATUS_HW_PORT_ERR;
+        }
         return -1;
     }
 
@@ -560,16 +658,30 @@ ops_cls_pd_lag_update(struct ops_cls_list             *list,
        return -1;
     }
 
+    if ((direction == OPS_CLS_DIRECTION_OUT) &&
+        (action == OPS_CLS_LAG_MEMBER_INTF_ADD)) {
+
+        /* check if it is a rollback test ACL. If it is
+           return an error */
+        if (acl_list_is_rollback_test_list(list)) {
+            VLOG_DBG("Rollback test ACL\n");
+            if (pd_status) {
+                pd_status->status_code = OPS_CLS_STATUS_HW_NOT_FOUND_ERR;
+            }
+            return -1;
+        }
+    }
+
     /* Find the list */
     acl = acl_lookup_by_uuid(&list->list_id);
 
     if (!acl) {
-        /* Create a new ACL entry */
-        acl_create(list);
-        VLOG_DBG("List %s created\n", list->list_name);
+        VLOG_DBG("Classifier %s doesn't exist in hashmap\n", list->list_name);
+        return -1;
     } else {
         VLOG_DBG("Classifier %s exist in hashmap", list->list_name);
     }
+
     bundle = bundle_lookup(ofproto_sim, aux);
     if (!bundle) {
         VLOG_ERR("Bundle not found\n");
