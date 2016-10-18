@@ -89,7 +89,7 @@ init(void)
     classifier_sim_init();
 
     /* register STP plugin */
-    register_stp_plugins();
+    /* register_stp_plugins(); */
 }
 
 void
